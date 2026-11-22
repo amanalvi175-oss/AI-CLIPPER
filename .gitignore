@@ -1,0 +1,15 @@
+﻿AI_CLIPPER_PROJECTS/
+*.mp4
+*.mp3
+*.wav
+*.m4a
+*.mov
+*.avi
+*.mkv
+*.zip
+__pycache__/
+*.pyc
+.venv/
+venv/
+.env
+.streamlit/secrets.toml
