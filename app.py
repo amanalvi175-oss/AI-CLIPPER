@@ -1335,6 +1335,11 @@ elif page == "AI Highlights":
             except Exception as exc:
                 st.error(str(exc))
 
+        try:
+            source_duration = get_duration(st.session_state.video_path)
+        except Exception:
+            source_duration = max(float(item.get("end", 0)) for item in st.session_state.clips)
+
         for i, clip in enumerate(
             st.session_state.clips, 1
         ):
@@ -1351,6 +1356,33 @@ elif page == "AI Highlights":
                 st.metric("Transcript-based editorial score", f"{viral_score}/100")
                 st.caption("Heuristic guidance only — not a prediction of views.")
                 st.write("**Score factors:** " + " · ".join(score_reasons))
+
+                st.markdown("**Fine-tune this clip**")
+                edit_left, edit_right = st.columns(2)
+                with edit_left:
+                    edited_start = st.number_input(
+                        "Start time (seconds)", min_value=0.0,
+                        max_value=max(0.1, float(source_duration) - 0.1),
+                        value=min(float(clip["start"]), max(0.0, float(source_duration) - 0.1)),
+                        step=0.1, key=f"highlight_start_{i}",
+                    )
+                with edit_right:
+                    edited_end = st.number_input(
+                        "End time (seconds)", min_value=0.1,
+                        max_value=max(0.1, float(source_duration)),
+                        value=min(float(clip["end"]), max(0.1, float(source_duration))),
+                        step=0.1, key=f"highlight_end_{i}",
+                    )
+                if edited_end > edited_start:
+                    if (edited_start != float(clip["start"]) or
+                            edited_end != float(clip["end"])):
+                        clip["start"] = float(edited_start)
+                        clip["end"] = float(edited_end)
+                        save_project()
+                        st.caption("Updated clip timing is saved to this project.")
+                else:
+                    st.warning("End time must be later than start time.")
+
                 st.caption("Review before exporting.")
 
 # ----------------------- CLIP EDITOR ------------------------
