@@ -10,7 +10,7 @@ from pathlib import Path
 import streamlit as st
 import imageio_ffmpeg
 from faster_whisper import WhisperModel
-from video_analysis import detect_scene_changes, detect_silence_ranges, build_scene_clips, score_highlight_text, build_keep_ranges, map_transcript_to_keep_ranges, compact_video_with_ffmpeg, detect_face_centers, build_face_crop_expression
+from video_analysis import detect_scene_changes, detect_silence_ranges, build_scene_clips, score_highlight_text, build_keep_ranges, map_transcript_to_keep_ranges, compact_video_with_ffmpeg, detect_face_centers, detect_active_speaker_centers, build_face_crop_expression
 
 # ============================================================
 # AI CLIPPER 5.1 - FINAL MASTER EDITION
@@ -535,7 +535,7 @@ def export_clip(
     subtitle_color="#FFFFFF", subtitle_outline=2,
     crop_mode="Center crop", fade_seconds=0.0,
     music_path=None, logo_path=None,
-    mix_original_audio=True, music_volume=0.12, crop_position=0.5, face_follow=False,
+    mix_original_audio=True, music_volume=0.12, crop_position=0.5, face_follow=False, active_speaker=False,
 ):
     require_ffmpeg()
 
@@ -572,7 +572,17 @@ def export_clip(
             )
         else:
             crop_x = f"(in_w-out_w)*{max(0.0, min(1.0, float(crop_position))):.3f}"
-            if face_follow:
+            if active_speaker:
+                try:
+                    speaker_points = detect_active_speaker_centers(video, start, end)
+                    dynamic_x = build_face_crop_expression(speaker_points)
+                    if dynamic_x:
+                        crop_x = dynamic_x
+                    else:
+                        st.warning("No mouth-motion track found; using manual crop.")
+                except Exception as speaker_error:
+                    st.warning(f"Active-speaker estimate unavailable; using manual crop. {speaker_error}")
+            elif face_follow:
                 try:
                     face_points = detect_face_centers(video, start, end)
                     dynamic_x = build_face_crop_expression(face_points)
@@ -1257,6 +1267,11 @@ elif page == "Clip Editor & Export":
                     value=False,
                     help="Uses lightweight CPU face detection to keep the largest visible face in frame. Sampling may miss profiles, poor lighting or multiple speakers.",
                 )
+                active_speaker = st.checkbox(
+                    "Experimental active-speaker framing (mouth-motion estimate)",
+                    value=False,
+                    help="Tracks the face with strongest mouth-region movement. This is a visual heuristic, not voice diarization; multiple faces and camera movement can confuse it.",
+                )
 
         remove_silence = st.checkbox(
             "Automatically remove long silent gaps",
@@ -1439,6 +1454,7 @@ elif page == "Clip Editor & Export":
                         music_volume,
                         crop_position,
                         face_follow if aspect_label.startswith("9:16") and crop_mode == "Center crop" else False,
+                        active_speaker if aspect_label.startswith("9:16") and crop_mode == "Center crop" else False,
                     )
 
                     completed.append(str(output))
