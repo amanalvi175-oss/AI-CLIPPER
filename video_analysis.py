@@ -11,7 +11,7 @@ def detect_scene_changes(ffmpeg, video_path, threshold=0.35, max_points=200):
         stdout=subprocess.PIPE, stderr=subprocess.PIPE,
         text=True, encoding="utf-8", errors="replace",
     )
-    values = re.findall(r"pts_time:([0-9.]+)", process.stderr)
+    words = re.findall(r"\b[\w']+\b", value)
     return [round(float(value), 2) for value in values[:max_points]]
 
 
