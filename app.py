@@ -10,7 +10,7 @@ from pathlib import Path
 import streamlit as st
 import imageio_ffmpeg
 from faster_whisper import WhisperModel
-from video_analysis import detect_scene_changes, detect_silence_ranges, build_scene_clips, score_highlight_text, build_keep_ranges, map_transcript_to_keep_ranges, compact_video_with_ffmpeg
+from video_analysis import detect_scene_changes, detect_silence_ranges, build_scene_clips, score_highlight_text, build_keep_ranges, map_transcript_to_keep_ranges, compact_video_with_ffmpeg, detect_face_centers, build_face_crop_expression
 
 # ============================================================
 # AI CLIPPER 5.1 - FINAL MASTER EDITION
@@ -478,7 +478,7 @@ def export_clip(
     subtitle_color="#FFFFFF", subtitle_outline=2,
     crop_mode="Center crop", fade_seconds=0.0,
     music_path=None, logo_path=None,
-    mix_original_audio=True, music_volume=0.12, crop_position=0.5,
+    mix_original_audio=True, music_volume=0.12, crop_position=0.5, face_follow=False,
 ):
     require_ffmpeg()
 
@@ -514,10 +514,19 @@ def export_clip(
                 "setsar=1[base]"
             )
         else:
+            crop_x = f"(in_w-out_w)*{max(0.0, min(1.0, float(crop_position))):.3f}"
+            if face_follow:
+                try:
+                    face_points = detect_face_centers(video, start, end)
+                    dynamic_x = build_face_crop_expression(face_points)
+                    if dynamic_x:
+                        crop_x = dynamic_x
+                except Exception as face_error:
+                    st.warning(f"Face-follow framing unavailable; using manual crop. {face_error}")
             graph = (
                 "[0:v]scale=720:1280:"
                 "force_original_aspect_ratio=increase,"
-                f"crop=720:1280:x=(in_w-out_w)*{max(0.0, min(1.0, float(crop_position))):.3f}:y=(in_h-out_h)/2,setsar=1[base]"
+                f"crop=720:1280:x='{crop_x}':y=(in_h-out_h)/2,setsar=1[base]"
             )
     else:
         graph = (
@@ -1160,12 +1169,18 @@ elif page == "Clip Editor & Export":
                     "Fit with blurred background",
                 ],
             )
+            face_follow = False
             if crop_mode == "Center crop":
                 crop_position = st.slider(
                     "Horizontal subject position",
                     0, 100, 50, 1,
-                    help="Shift the crop left or right to keep the speaker in frame.",
+                    help="Manual fallback position when face-follow is disabled or no face is detected.",
                 ) / 100.0
+                face_follow = st.checkbox(
+                    "Experimental AI face-follow framing",
+                    value=False,
+                    help="Uses lightweight CPU face detection to keep the largest visible face in frame. Sampling may miss profiles, poor lighting or multiple speakers.",
+                )
 
         remove_silence = st.checkbox(
             "Automatically remove long silent gaps",
@@ -1338,6 +1353,7 @@ elif page == "Clip Editor & Export":
                         mix_audio,
                         music_volume,
                         crop_position,
+                        face_follow if aspect_label.startswith("9:16") and crop_mode == "Center crop" else False,
                     )
 
                     completed.append(str(output))
