@@ -1,7 +1,7 @@
 import unittest
 from unittest.mock import patch, Mock
 
-from video_analysis import build_scene_clips, detect_scene_changes, detect_silence_ranges, score_highlight_text
+from video_analysis import build_scene_clips, detect_scene_changes, detect_silence_ranges, score_highlight_text, build_face_crop_expression
 
 
 class VideoAnalysisTests(unittest.TestCase):
@@ -56,6 +56,15 @@ class VideoAnalysisTests(unittest.TestCase):
         score, reasons = score_highlight_text("You should learn why this important lesson matters.")
         self.assertGreater(score, 0)
         self.assertTrue(any("Substantial spoken content" in reason for reason in reasons))
+
+    def test_face_crop_expression_tracks_multiple_positions(self):
+        expression = build_face_crop_expression([(0, 0.25), (2, 0.75), (4, 0.5)])
+        self.assertIn("if(lt(t,2.000)", expression)
+        self.assertIn("in_w-out_w", expression)
+        self.assertTrue(expression.startswith("max(0,min("))
+
+    def test_face_crop_expression_handles_no_detection(self):
+        self.assertIsNone(build_face_crop_expression([]))
 
 
 if __name__ == "__main__":
