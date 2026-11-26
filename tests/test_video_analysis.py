@@ -1,7 +1,7 @@
 import unittest
 from unittest.mock import patch, Mock
 
-from video_analysis import build_scene_clips, detect_silence_ranges
+from video_analysis import build_scene_clips, detect_silence_ranges, score_highlight_text
 
 
 class VideoAnalysisTests(unittest.TestCase):
@@ -18,6 +18,17 @@ class VideoAnalysisTests(unittest.TestCase):
         result = detect_silence_ranges("ffmpeg", "video.mp4", total_duration=12)
         self.assertEqual(result[0], {"start": 2.0, "end": 4.5, "duration": 2.5})
         self.assertEqual(result[1], {"start": 8.0, "end": 12.0, "duration": 4.0})
+
+
+    def test_highlight_score_rewards_hook_and_explains_signals(self):
+        plain_score, _ = score_highlight_text("A short update about the meeting today.")
+        hook_score, reasons = score_highlight_text(
+            "Here is why you should never make this mistake! What if you could learn the secret?"
+        )
+        self.assertGreater(hook_score, plain_score)
+        self.assertTrue(any("hook" in reason.lower() for reason in reasons))
+        self.assertTrue(any("question" in reason.lower() for reason in reasons))
+
 
 
 if __name__ == "__main__":
