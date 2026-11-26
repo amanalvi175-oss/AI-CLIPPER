@@ -116,6 +116,39 @@ def has_audio(path):
 
     return bool(re.search(r"Audio:", proc.stderr))
 
+def detect_silence(path, noise_db=-35, min_duration=0.5):
+    """Detect quiet audio intervals with FFmpeg; does not modify the source."""
+    require_ffmpeg()
+    if not has_audio(path):
+        return []
+    proc = subprocess.run(
+        [FFMPEG, "-hide_banner", "-i", str(path),
+         "-af", f"silencedetect=noise={float(noise_db):.1f}dB:d={float(min_duration):.2f}",
+         "-f", "null", "-"],
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+        encoding="utf-8", errors="replace",
+    )
+    if proc.returncode != 0:
+        raise RuntimeError(proc.stderr[-3000:] or "Silence analysis failed.")
+    events = [(m.group(1), float(m.group(2))) for m in
+              re.finditer(r"silence_(start|end):\s*([0-9.]+)", proc.stderr)]
+    intervals, open_start = [], None
+    for kind, timestamp in events:
+        if kind == "start":
+            open_start = timestamp
+        elif kind == "end" and open_start is not None:
+            if timestamp > open_start:
+                intervals.append({"start": open_start, "end": timestamp, "duration": timestamp - open_start})
+            open_start = None
+    if open_start is not None:
+        try:
+            final_duration = get_duration(path)
+            if final_duration > open_start:
+                intervals.append({"start": open_start, "end": final_duration, "duration": final_duration - open_start})
+        except Exception:
+            pass
+    return intervals
+
 def ffmpeg_filter_path(path):
     value = str(Path(path).resolve()).replace("\\", "/")
     value = value.replace("\\", r"\\")
@@ -801,7 +834,10 @@ with st.sidebar:
         [
             "Dashboard",
             "Import Video",
+            "Project History",
             "Subtitles & Transcript",
+            "AI Intelligence",
+            "Silence Analysis",
             "AI Highlights",
             "Clip Editor & Export",
             "Content Studio",
@@ -1036,6 +1072,48 @@ elif page == "AI Intelligence":
         else:
             st.success("No common English filler words detected in the transcript.")
         st.warning("Speech recognition can misclassify words, especially in mixed Hindi-English. Review before editing audio.")
+
+elif page == "Silence Analysis":
+
+    st.header("Silence analysis")
+    st.caption("Find quiet gaps in the source audio. This report does not modify the original video.")
+
+    if not st.session_state.video_path:
+        st.info("Import or reopen a project first.")
+    elif not has_audio(st.session_state.video_path):
+        st.warning("No audio stream was detected in this video.")
+    else:
+        noise_db = st.slider("Silence threshold (dB)", -60, -15, -35, 1)
+        min_gap = st.slider("Minimum quiet gap (seconds)", 0.2, 3.0, 0.5, 0.1)
+        if st.button("Analyze quiet gaps", type="primary"):
+            try:
+                with st.spinner("Analyzing audio with FFmpeg..."):
+                    gaps = detect_silence(st.session_state.video_path, noise_db, min_gap)
+                st.session_state["silence_report"] = gaps
+                st.success(f"Analysis complete: {len(gaps)} quiet interval(s) found.")
+            except Exception as exc:
+                st.error(f"Silence analysis failed: {exc}")
+        gaps = st.session_state.get("silence_report")
+        if gaps is not None:
+            duration = get_duration(st.session_state.video_path)
+            total_quiet = sum(item["duration"] for item in gaps)
+            first, second, third = st.columns(3)
+            first.metric("Quiet intervals", len(gaps))
+            second.metric("Total quiet time", f"{total_quiet:.1f}s")
+            third.metric("Share of video", f"{(total_quiet / max(duration, 0.001) * 100):.1f}%")
+            if gaps:
+                st.dataframe(
+                    [{"Start (s)": round(x["start"], 2), "End (s)": round(x["end"], 2), "Duration (s)": round(x["duration"], 2)} for x in gaps],
+                    use_container_width=True, hide_index=True,
+                )
+                csv_rows = ["start_seconds,end_seconds,duration_seconds"] + [
+                    f'{x["start"]:.3f},{x["end"]:.3f},{x["duration"]:.3f}' for x in gaps
+                ]
+                st.download_button("Download quiet-gap report (CSV)", data="\n".join(csv_rows),
+                                   file_name="silence_report.csv", mime="text/csv")
+                st.warning("Detection may flag pauses, soft speech or background ambience. Listen before deciding to cut anything.")
+            else:
+                st.success("No quiet intervals matched these settings.")
 
 elif page == "Subtitles & Transcript":
 
