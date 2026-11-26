@@ -188,3 +188,72 @@ def compact_video_with_ffmpeg(ffmpeg, video_path, keep_ranges, destination, incl
     subprocess.run([ffmpeg, *command], stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                    text=True, encoding="utf-8", errors="replace", check=True)
     return destination
+
+
+
+def detect_face_centers(video_path, start_time=0.0, end_time=None,
+                        sample_interval=0.75, max_samples=180):
+    """Detect the largest visible face at sampled times; returns (local_time, x_center)."""
+    try:
+        import cv2
+    except ImportError as exc:
+        raise RuntimeError("Face tracking needs opencv-python-headless. Install project requirements.") from exc
+    capture = cv2.VideoCapture(str(video_path))
+    if not capture.isOpened():
+        raise RuntimeError("Could not open video for face detection.")
+    detector = cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_frontalface_default.xml")
+    if detector.empty():
+        capture.release()
+        raise RuntimeError("OpenCV face detector could not be loaded.")
+    fps = capture.get(cv2.CAP_PROP_FPS) or 25.0
+    frame_count = capture.get(cv2.CAP_PROP_FRAME_COUNT) or 0
+    duration = frame_count / fps if frame_count else 0.0
+    start = max(0.0, float(start_time))
+    finish = min(float(end_time), duration) if end_time is not None and duration else (float(end_time) if end_time is not None else duration)
+    if finish <= start:
+        capture.release()
+        return []
+    count = min(int(max_samples), max(1, int((finish - start) / max(0.1, sample_interval)) + 1))
+    step = (finish - start) / max(1, count - 1)
+    points = []
+    try:
+        for index in range(count):
+            timestamp = start + index * step
+            capture.set(cv2.CAP_PROP_POS_MSEC, timestamp * 1000.0)
+            ok, frame = capture.read()
+            if not ok:
+                continue
+            height, width = frame.shape[:2]
+            if width > 960:
+                scale = 960.0 / width
+                frame = cv2.resize(frame, (960, max(1, int(height * scale))))
+                height, width = frame.shape[:2]
+            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+            faces = detector.detectMultiScale(gray, scaleFactor=1.12, minNeighbors=5, minSize=(32, 32))
+            if len(faces):
+                x, y, w, h = max(faces, key=lambda item: int(item[2]) * int(item[3]))
+                center = max(0.0, min(1.0, (float(x) + float(w) / 2.0) / width))
+                points.append((round(timestamp - start, 3), round(center, 4)))
+    finally:
+        capture.release()
+    return points
+
+
+def build_face_crop_expression(face_points):
+    """Build an FFmpeg crop-x expression from local-time normalized face centers."""
+    points = sorted((max(0.0, float(t)), max(0.0, min(1.0, float(x)))) for t, x in face_points)
+    if not points:
+        return None
+    if len(points) == 1:
+        return f"max(0,min(in_w-out_w,{points[0][1]:.4f}*in_w-out_w/2))"
+    expression = f"{points[-1][1]:.4f}*in_w-out_w/2"
+    for index in range(len(points) - 2, -1, -1):
+        t0, x0 = points[index]
+        t1, x1 = points[index + 1]
+        if t1 <= t0:
+            continue
+        interpolated = f"({x0:.4f}+({x1-x0:.4f})*(t-{t0:.3f})/{t1-t0:.3f})*in_w-out_w/2"
+        expression = f"if(lt(t,{t1:.3f}),{interpolated},{expression})"
+    first_t, first_x = points[0]
+    expression = f"if(lt(t,{first_t:.3f}),{first_x:.4f}*in_w-out_w/2,{expression})"
+    return f"max(0,min(in_w-out_w,{expression}))"
