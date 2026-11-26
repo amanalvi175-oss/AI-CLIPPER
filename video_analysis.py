@@ -11,8 +11,15 @@ def detect_scene_changes(ffmpeg, video_path, threshold=0.35, max_points=200):
         stdout=subprocess.PIPE, stderr=subprocess.PIPE,
         text=True, encoding="utf-8", errors="replace",
     )
-    words = re.findall(r"\b[\w']+\b", value)
-    return [round(float(value), 2) for value in values[:max_points]]
+    timestamps = re.findall(r"pts_time:([0-9]+(?:\.[0-9]+)?)", process.stderr)
+    points = []
+    for timestamp in timestamps:
+        point = float(timestamp)
+        if not points or point - points[-1] >= 0.25:
+            points.append(point)
+        if len(points) >= int(max_points):
+            break
+    return [round(point, 2) for point in points]
 
 
 def detect_silence_ranges(ffmpeg, video_path, noise_db=-35, min_duration=0.5, total_duration=0):
@@ -69,7 +76,7 @@ ENGAGEMENT_WORDS = {
 def score_highlight_text(text):
     """Return a transparent editorial score; it is not a prediction of virality."""
     value = str(text).lower()
-    words = re.findall(r"\\b[\\w']+\\b", value)
+    words = re.findall(r"\b[\w']+\b", value)
     reasons = []
     score = min(len(words) / 12.0, 2.5)
 
