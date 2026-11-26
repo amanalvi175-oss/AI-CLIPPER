@@ -478,7 +478,7 @@ def export_clip(
     subtitle_color="#FFFFFF", subtitle_outline=2,
     crop_mode="Center crop", fade_seconds=0.0,
     music_path=None, logo_path=None,
-    mix_original_audio=True, music_volume=0.12,
+    mix_original_audio=True, music_volume=0.12, crop_position=0.5,
 ):
     require_ffmpeg()
 
