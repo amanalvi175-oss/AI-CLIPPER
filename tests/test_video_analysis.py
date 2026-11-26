@@ -31,5 +31,21 @@ class VideoAnalysisTests(unittest.TestCase):
 
 
 
+    def test_keep_ranges_remove_silence_but_preserve_pause_edges(self):
+        from video_analysis import build_keep_ranges
+        keep = build_keep_ranges(0, 20, [{"start": 5, "end": 10}], pad=0.2)
+        self.assertEqual(keep, [(0.0, 5.2), (9.8, 20.0)])
+
+    def test_transcript_is_remapped_after_silence_removal(self):
+        from video_analysis import map_transcript_to_keep_ranges
+        source = [
+            {"start": 1, "end": 3, "text": "hello"},
+            {"start": 8, "end": 11, "text": "world"},
+        ]
+        result = map_transcript_to_keep_ranges(source, [(0, 5), (10, 15)])
+        self.assertEqual(result[0], {"start": 1.0, "end": 3.0, "text": "hello"})
+        self.assertEqual(result[1], {"start": 5.0, "end": 6.0, "text": "world"})
+
+
 if __name__ == "__main__":
     unittest.main()
