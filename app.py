@@ -526,14 +526,51 @@ def write_word_ass(segments, destination, offset=0.0, end=None, font_size=30, pr
     return destination
 
 
-def create_thumbnail(ffmpeg, video_path, timestamp, destination):
-    """Extract a representative frame for a clip thumbnail."""
+def create_thumbnail(ffmpeg, video_path, timestamp, destination, title="YOUR NEXT BIG CLIP"):
+    """Extract a representative frame and overlay a readable, wrapped title."""
     subprocess.run([ffmpeg, "-y", "-ss", f"{max(0.0, float(timestamp)):.3f}", "-i", str(video_path),
                     "-frames:v", "1", "-q:v", "2", str(destination)],
                    stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True,
                    text=True, encoding="utf-8", errors="replace")
     if not Path(destination).exists() or Path(destination).stat().st_size == 0:
         raise RuntimeError("Thumbnail frame could not be generated.")
+    try:
+        from PIL import Image, ImageDraw, ImageFont
+        image = Image.open(destination).convert("RGB")
+        width, height = image.size
+        draw = ImageDraw.Draw(image, "RGBA")
+        top = int(height * 0.62)
+        draw.rectangle((0, top, width, height), fill=(4, 8, 18, 215))
+        font = None
+        for candidate in ["/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+                          "C:/Windows/Fonts/arialbd.ttf", "C:/Windows/Fonts/Arial.ttf"]:
+            try:
+                font = ImageFont.truetype(candidate, max(22, int(width * 0.065)))
+                break
+            except Exception:
+                pass
+        if font is None:
+            font = ImageFont.load_default()
+        title_text = " ".join(str(title).split()).upper()[:72] or "WATCH NOW"
+        lines, line = [], ""
+        for word in title_text.split():
+            trial = (line + " " + word).strip()
+            if draw.textbbox((0, 0), trial, font=font)[2] > width - 48 and line:
+                lines.append(line)
+                line = word
+            else:
+                line = trial
+        if line:
+            lines.append(line)
+        y = top + 16
+        for line in lines[:3]:
+            draw.text((26, y+3), line, font=font, fill=(0,0,0,240), stroke_width=2)
+            draw.text((24, y), line, font=font, fill=(255,255,255,255),
+                      stroke_width=1, stroke_fill=(20,220,255,255))
+            y += max(30, int(width*0.075))
+        image.save(destination, quality=92)
+    except ImportError:
+        pass
     return destination
 
 
@@ -1271,8 +1308,10 @@ elif page == "Clip Editor & Export":
             ["9:16 vertical", "16:9 landscape"],
         )
 
-        crop_mode = "Center crop"
-        crop_position = 0.5
+        crop_mode = EDITING_PREFERENCES.get("crop_mode", "Center crop")
+        crop_position = float(EDITING_PREFERENCES.get("crop_position", 0.5))
+        face_follow = bool(EDITING_PREFERENCES.get("face_follow", False))
+        active_speaker = bool(EDITING_PREFERENCES.get("active_speaker", False))
 
         if aspect_label.startswith("9:16"):
 
@@ -1283,7 +1322,6 @@ elif page == "Clip Editor & Export":
                     "Fit with blurred background",
                 ],
             )
-            face_follow = False
             if crop_mode == "Center crop":
                 crop_position = st.slider(
                     "Horizontal subject position",
@@ -1661,7 +1699,7 @@ elif page == "Content Studio":
                         thumb_path = thumb_dir / f"clip_{i:02}_thumbnail.jpg"
                         create_thumbnail(FFMPEG, st.session_state.video_path,
                                          (float(clip["start"]) + float(clip["end"])) / 2,
-                                         thumb_path)
+                                         thumb_path, title=st.session_state.get(f"meta_title_{i}", metadata_for(clip["text"])[0]))
                         st.image(str(thumb_path), caption=f"Thumbnail for clip {i}")
                         st.download_button("Download thumbnail", thumb_path.read_bytes(),
                                            file_name=thumb_path.name, mime="image/jpeg",
