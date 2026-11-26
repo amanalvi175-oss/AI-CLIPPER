@@ -661,6 +661,7 @@ def export_clip(
     crop_mode="Center crop", fade_seconds=0.0,
     music_path=None, logo_path=None,
     mix_original_audio=True, music_volume=0.12,
+    subtitle_preset="Classic",
 ):
     require_ffmpeg()
 
@@ -715,14 +716,24 @@ def export_clip(
         sub_path = ffmpeg_filter_path(srt_path)
         color = ass_color(subtitle_color)
 
+        preset_styles = {
+            "Classic": ("Arial", 1, 2, 55),
+            "Bold Creator": ("Arial", 1, 3, 85),
+            "Minimal": ("Arial", 0, 1, 42),
+            "Top Caption": ("Arial", 1, 3, 90),
+        }
+        font_name, is_bold, outline_size, margin_v = preset_styles.get(
+            subtitle_preset, preset_styles["Classic"]
+        )
+        alignment = 8 if subtitle_preset == "Top Caption" else 2
         graph += (
             f";[{current}]subtitles='{sub_path}':"
-            f"force_style='FontName=Arial,"
-            f"FontSize={int(subtitle_size)},Bold=1,"
+            f"force_style='FontName={font_name},"
+            f"FontSize={int(subtitle_size)},Bold={is_bold},"
             f"PrimaryColour={color},"
             f"OutlineColour=&H00000000,"
-            f"Outline={int(subtitle_outline)},"
-            f"Shadow=1,Alignment=2,MarginV=55'[subbed]"
+            f"Outline={max(int(subtitle_outline), outline_size)},"
+            f"Shadow=1,Alignment={alignment},MarginV={margin_v}'[subbed]"
         )
 
         current = "subbed"
@@ -1379,6 +1390,30 @@ elif page == "Thumbnail Studio":
             except Exception as exc:
                 st.error(f"Thumbnail generation failed: {exc}")
 
+        if st.button("Generate thumbnails for ALL highlights"):
+            try:
+                folder = Path(st.session_state.project_dir) / "EXPORTS" / "THUMBNAILS"
+                folder.mkdir(parents=True, exist_ok=True)
+                generated = []
+                progress = st.progress(0)
+                with st.spinner("Creating one thumbnail per highlight..."):
+                    for index, item in enumerate(st.session_state.clips, 1):
+                        midpoint = (float(item["start"]) + float(item["end"])) / 2
+                        target = folder / f"clip_{index:02}_thumbnail.jpg"
+                        generated.append(create_thumbnail(st.session_state.video_path, midpoint, target, thumb_width))
+                        progress.progress(index / len(st.session_state.clips))
+                bundle = folder / "ALL_THUMBNAILS.zip"
+                with zipfile.ZipFile(bundle, "w", zipfile.ZIP_DEFLATED) as archive:
+                    for image_path in generated:
+                        archive.write(image_path, image_path.name)
+                st.success(f"Created {len(generated)} thumbnails.")
+                st.download_button(
+                    "Download all thumbnails (ZIP)", data=bundle.read_bytes(),
+                    file_name=bundle.name, mime="application/zip",
+                )
+            except Exception as exc:
+                st.error(f"Batch thumbnail generation failed: {exc}")
+
         last_thumb = st.session_state.get("last_thumbnail_path")
         if last_thumb and Path(last_thumb).is_file():
             st.image(last_thumb, caption=Path(last_thumb).name, use_container_width=True)
@@ -1429,6 +1464,12 @@ elif page == "Clip Editor & Export":
 
         subtitle_outline = st.slider(
             "Subtitle outline thickness", 0, 5, 2
+        )
+
+        subtitle_preset = st.selectbox(
+            "Caption style preset",
+            ["Classic", "Bold Creator", "Minimal", "Top Caption"],
+            help="Applies a readable subtitle layout. Word-by-word animation is not included.",
         )
 
         fade_seconds = st.slider(
@@ -1534,6 +1575,7 @@ elif page == "Clip Editor & Export":
                         logo_path,
                         mix_audio,
                         music_volume,
+                        subtitle_preset,
                     )
 
                     completed.append(str(output))
