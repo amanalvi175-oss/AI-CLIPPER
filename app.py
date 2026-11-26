@@ -10,7 +10,7 @@ from pathlib import Path
 import streamlit as st
 import imageio_ffmpeg
 from faster_whisper import WhisperModel
-from video_analysis import detect_scene_changes, detect_silence_ranges, build_scene_clips, score_highlight_text
+from video_analysis import detect_scene_changes, detect_silence_ranges, build_scene_clips, score_highlight_text, build_keep_ranges, map_transcript_to_keep_ranges, compact_video_with_ffmpeg
 
 # ============================================================
 # AI CLIPPER 5.1 - FINAL MASTER EDITION
@@ -1167,6 +1167,21 @@ elif page == "Clip Editor & Export":
                     help="Shift the crop left or right to keep the speaker in frame.",
                 ) / 100.0
 
+        remove_silence = st.checkbox(
+            "Automatically remove long silent gaps",
+            value=False,
+            help="Cuts detected silence while keeping a short pause around speech. This adds processing time.",
+        )
+        silence_threshold = -35
+        silence_minimum = 0.7
+        if remove_silence:
+            silence_threshold = st.slider(
+                "Silence detection threshold (dB)", -60, -15, -35, 1
+            )
+            silence_minimum = st.slider(
+                "Only remove gaps longer than (seconds)", 0.3, 3.0, 0.7, 0.1
+            )
+
         burn = st.checkbox(
             "Burn subtitles into video",
             value=True,
@@ -1257,6 +1272,18 @@ elif page == "Clip Editor & Export":
 
             try:
 
+                silence_ranges = []
+                if remove_silence:
+                    if has_audio(st.session_state.video_path):
+                        with st.spinner("Detecting silent sections..."):
+                            source_duration = get_duration(st.session_state.video_path)
+                            silence_ranges = detect_silence_ranges(
+                                FFMPEG, st.session_state.video_path,
+                                silence_threshold, silence_minimum, source_duration
+                            )
+                    else:
+                        st.warning("This video has no audio track; silence removal was skipped.")
+
                 for i, clip in enumerate(
                     st.session_state.clips, 1
                 ):
@@ -1266,13 +1293,36 @@ elif page == "Clip Editor & Export":
                         f"{len(st.session_state.clips)}..."
                     )
 
+                    source_for_export = st.session_state.video_path
+                    clip_for_export = dict(clip)
+                    transcript_for_export = st.session_state.transcript
+                    compacted_path = export_dir / f"clip_{i:02}_compacted.mp4"
+
+                    if remove_silence and silence_ranges:
+                        keep_ranges = build_keep_ranges(
+                            clip["start"], clip["end"], silence_ranges, pad=0.15,
+                            min_gap=silence_minimum
+                        )
+                        kept_duration = sum(b - a for a, b in keep_ranges)
+                        original_duration = float(clip["end"]) - float(clip["start"])
+                        if keep_ranges and kept_duration < original_duration - 0.05:
+                            with st.spinner(f"Removing silent gaps from clip {i}..."):
+                                compact_video_with_ffmpeg(
+                                    FFMPEG, st.session_state.video_path,
+                                    keep_ranges, compacted_path, include_audio=True
+                                )
+                            source_for_export = str(compacted_path)
+                            clip_for_export = {"start": 0.0, "end": kept_duration}
+                            transcript_for_export = map_transcript_to_keep_ranges(
+                                st.session_state.transcript, keep_ranges
+                            )
+
                     output, _ = export_clip(
-                        st.session_state.video_path,
-                        clip,
+                        source_for_export,
+                        clip_for_export,
                         i,
                         export_dir,
-                        st.session_state.transcript,
-                        (
+                        transcript_for_export,                        (
                             "9:16"
                             if aspect_label.startswith("9:16")
                             else "16:9"
