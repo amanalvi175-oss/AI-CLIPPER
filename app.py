@@ -341,36 +341,36 @@ def find_highlights(
 # ----------------------- METADATA ---------------------------
 
 def metadata_for(text):
-    words = re.findall(r"\b[a-zA-Z0-9]+\b", text.lower())
-
+    """Create editable, transcript-grounded metadata without paid APIs."""
+    raw = re.sub(r"\\s+", " ", str(text)).strip()
+    words = re.findall(r"\\b[a-zA-Z0-9']+\\b", raw)
     stop = {
-        "this", "that", "with", "from", "your", "you",
-        "the", "and", "for", "are", "was", "were",
-        "have", "has", "had", "what", "when", "then",
-        "they", "them", "about", "into", "just", "like",
-        "very", "really", "because", "there", "their",
+        "this", "that", "with", "from", "your", "you", "the", "and",
+        "for", "are", "was", "were", "have", "has", "had", "what",
+        "when", "then", "they", "them", "about", "into", "just",
+        "like", "very", "really", "because", "there", "their",
+        "have", "will", "would", "could", "should", "which", "while",
     }
-
     counts = {}
-
     for word in words:
-        if len(word) > 3 and word not in stop:
-            counts[word] = counts.get(word, 0) + 1
-
-    topics = sorted(
-        counts,
-        key=counts.get,
-        reverse=True,
-    )[:5] or ["video", "highlights"]
-
-    title = " ".join(w.title() for w in topics[:3])
-    hashtags = " ".join("#" + w for w in topics)
-
+        key = word.lower()
+        if len(key) > 3 and key not in stop:
+            counts[key] = counts.get(key, 0) + 1
+    topics = sorted(counts, key=counts.get, reverse=True)[:5] or ["video", "highlights"]
+    first_sentence = re.split(r"(?<=[.!?])\\s+", raw)[0] if raw else ""
+    title_words = re.findall(r"\\b[a-zA-Z0-9']+\\b", first_sentence)[:10]
+    title = " ".join(title_words).strip().rstrip(".,!?")
+    if len(title) < 12:
+        title = " ".join(w.title() for w in topics[:3])
+    elif len(title) > 68:
+        title = title[:65].rsplit(" ", 1)[0] + "..."
+    hashtags = " ".join("#" + word for word in topics[:5])
+    summary = raw[:220].rsplit(" ", 1)[0] if len(raw) > 220 else raw
     description = (
-        f"Watch this highlight on {', '.join(topics[:3])}."
-        f"\n\n{hashtags}"
+        (summary or "A short highlight from this video.")
+        + "\\n\\nKey topics: " + ", ".join(topics[:3])
+        + "\\n\\n" + hashtags
     )
-
     return title, description, hashtags
 
 # ----------------------- PROJECTS ---------------------------
