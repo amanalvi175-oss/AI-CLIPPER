@@ -736,7 +736,7 @@ def export_clip(
 
         current = "vlogo"
 
-    if fade_seconds > 0:
+    if fade_seconds > 0 and transition_style != "None":
         fade = min(float(fade_seconds), duration / 3)
 
         graph += (
@@ -1306,9 +1306,11 @@ elif page == "Clip Editor & Export":
                         save_project()
                         st.success("Clip timing updated and saved.")
 
+        aspect_options = ["9:16 vertical", "16:9 landscape"]
+        saved_aspect = EDITING_PREFERENCES.get("aspect_label", "9:16 vertical")
         aspect_label = st.selectbox(
-            "Output format",
-            ["9:16 vertical", "16:9 landscape"],
+            "Output format", aspect_options,
+            index=aspect_options.index(saved_aspect) if saved_aspect in aspect_options else 0,
         )
 
         crop_mode = EDITING_PREFERENCES.get("crop_mode", "Center crop")
