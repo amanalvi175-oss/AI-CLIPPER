@@ -231,7 +231,6 @@ def import_from_url(url, project_dir, cookies_path=None):
         "extractor_retries": 3,
         "socket_timeout": 30,
         "cachedir": False,
-        "extractor_args": {"youtube": {"player_client": ["web_safari"]}},
         "remote_components": ["ejs:npm"],
     }
     if cookies_path:
@@ -257,11 +256,11 @@ def import_from_url(url, project_dir, cookies_path=None):
                 )
             else:
                 hint = (
-                    "The hosted Streamlit server cannot access your local "
-                    "Chrome login session. For YouTube URLs, run AI CLIPPER "
-                    "locally on your Windows PC using run_local.bat; it reads "
-                    "your Chrome cookies locally and does not upload them. "
-                    "Or use Computer Upload/direct MP4 URL."
+                    "YouTube blocked this cloud download or requires sign-in. "
+                    "Retry with an optional Netscape-format YouTube cookies.txt "
+                    "exported from a disposable account, or use Computer Upload "
+                    "or a direct MP4 URL. Some videos still require a PO Token "
+                    "and may not be downloadable from cloud hosting."
                 )
             raise RuntimeError(hint) from exc
         raise RuntimeError(f"Video URL download failed: {message}") from exc
@@ -1007,23 +1006,21 @@ elif page == "Import Video":
 
         st.caption(
             "Only download videos you own or have permission to use. "
-            "YouTube may require a signed-in session; cloud downloads can "
-            "still fail if YouTube blocks the server or requires a PO Token."
+            "The cloud server first tries a normal public download. "
+            "If YouTube requires sign-in, you can optionally provide a "
+            "Netscape-format YouTube-only cookies.txt from a disposable account."
         )
 
-        import os
-        if os.environ.get("AI_CLIPPER_LOCAL") == "1":
-            st.info(
-                "Local mode: YouTube downloads can use your Chrome session "
-                "directly on this PC. Your browser cookies are not uploaded."
-            )
-        else:
-            st.info(
-                "YouTube sign-in checks cannot use your PC's Chrome session "
-                "from Streamlit Cloud. For YouTube URLs, run this app locally "
-                "with run_local.bat. Computer Upload and direct MP4 URLs "
-                "continue to work here."
-            )
+        cookies_upload = st.file_uploader(
+            "Optional YouTube cookies.txt (disposable account only)",
+            type=["txt"],
+            help=(
+                "Used only for this import attempt and deleted from temporary "
+                "server storage afterward. Never upload your main Google account "
+                "cookies, browser-wide cookies, or passwords."
+            ),
+            key="youtube_cookies_upload",
+        )
 
         if st.button("Download and import", type="primary"):
             if not url.strip():
@@ -1032,9 +1029,33 @@ elif page == "Import Video":
                 project = Path(
                     tempfile.mkdtemp(prefix="clipper_", dir=ROOT)
                 )
+                cookie_temp_path = None
                 try:
-                    with st.spinner("Downloading video..."):
-                        video, title = import_from_url(url.strip(), project)
+                    if cookies_upload is not None:
+                        cookie_bytes = cookies_upload.getvalue()
+                        cookie_text = cookie_bytes.decode("utf-8-sig", errors="replace")
+                        if (
+                            "Netscape HTTP Cookie File" not in cookie_text[:500]
+                            and "HTTP Cookie File" not in cookie_text[:500]
+                        ):
+                            raise ValueError(
+                                "Cookies file must be in Netscape cookies.txt format. "
+                                "Export YouTube-only cookies from a disposable account."
+                            )
+                        cookie_handle = tempfile.NamedTemporaryFile(
+                            mode="wb", suffix="_youtube_cookies.txt", delete=False
+                        )
+                        cookie_temp_path = Path(cookie_handle.name)
+                        try:
+                            cookie_handle.write(cookie_bytes)
+                        finally:
+                            cookie_handle.close()
+
+                    with st.spinner("Downloading video from the cloud..."):
+                        video, title = import_from_url(
+                            url.strip(), project,
+                            cookies_path=cookie_temp_path,
+                        )
 
                     reset_project_state()
                     st.session_state.project_dir = str(project)
@@ -1046,6 +1067,12 @@ elif page == "Import Video":
                     st.rerun()
                 except Exception as exc:
                     st.error(f"Import failed: {exc}")
+                finally:
+                    if cookie_temp_path is not None:
+                        try:
+                            cookie_temp_path.unlink(missing_ok=True)
+                        except OSError:
+                            pass
 
     if st.session_state.video_path:
         st.divider()
