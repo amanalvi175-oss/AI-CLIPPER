@@ -406,7 +406,8 @@ def save_editing_preferences(values):
     temporary.replace(PREFERENCES_PATH)
     return data
 
-\ndef reset_project_state():
+
+def reset_project_state():
     for key, value in DEFAULTS.items():
         st.session_state[key] = value
 
@@ -832,6 +833,8 @@ div[data-testid="stMetric"] {
 }
 </style>
 """, unsafe_allow_html=True)
+
+EDITING_PREFERENCES = load_editing_preferences()
 
 for key, value in DEFAULTS.items():
     if key not in st.session_state:
