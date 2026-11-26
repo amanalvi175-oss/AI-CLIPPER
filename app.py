@@ -634,13 +634,15 @@ def build_script_outline(transcript):
         phrase in line.lower() for phrase in ("how to", "the truth", "you need to", "stop doing")
     )), lines[0])
     middle = lines[1:4]
+    points = [f"- {line}" for line in middle] if middle else [
+        "- Explain the main idea and give one practical example."
+    ]
     ending = lines[-1] if len(lines) > 1 else "Summarize the key takeaway."
-    return "\n".join([
-        "HOOK", hook, "",
-        "MAIN POINTS", *[f"- {line}" for line in middle] if middle else ["- Explain the main idea and give one practical example."],
-        "", "CLOSING", ending,
-        "", "CTA", "Ask viewers to comment with their experience or share the video.",
-    ])
+    return "\n".join(
+        ["HOOK", hook, "", "MAIN POINTS"] + points +
+        ["", "CLOSING", ending, "", "CTA",
+         "Ask viewers to comment with their experience or share the video."]
+    )
 
 def ass_color(hex_color):
     value = hex_color.lstrip("#")
