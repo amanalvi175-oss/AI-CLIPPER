@@ -8,7 +8,11 @@ A Streamlit-based, local-first video clipping workspace. It uses Faster-Whisper 
 - Transcribe speech and optionally translate it into English.
 - Rank candidate highlights using transcript-based heuristics.
 - Export vertical (9:16) and landscape (16:9) clips.
-- Burn word-timed captions, add a logo, mix background music, and apply fades.\n- Add optional zoom, progress indicator, soft-vignette or flash-intro visual finishes.\n- Save and reuse editing preferences on the same persistent app instance.\n- Generate video-frame thumbnails with editable title overlays.\n- Experimental active-speaker framing estimates mouth movement from sampled faces; it is not voice diarization and may be inaccurate.
+- Burn word-timed captions, add a logo, mix background music, and apply fades.
+- Add optional zoom, progress indicator, soft-vignette or flash-intro visual finishes.
+- Save and reuse editing preferences on the same persistent app instance.
+- Generate video-frame thumbnails with editable title overlays.
+- Experimental active-speaker framing estimates mouth movement from sampled faces; it is not voice diarization and may be inaccurate.
 - Generate editable title, description, and hashtag drafts.
 - Keep project metadata, transcripts, and exports in the app's project folder.
 
@@ -49,6 +53,13 @@ The app uses the FFmpeg executable bundled by `imageio-ffmpeg` when a system FFm
 - Highlight ranking is transcript-based and does not predict virality. Active-speaker framing is a lightweight mouth-motion heuristic, not robust speaker identification or diarization. Visual results depend on lighting, camera motion, face visibility and CPU sampling.
 - Direct publishing is not implemented. Use official platform APIs and approved authorization flows before adding it.
 
-## Current feature boundaries\n\n- The transition controls apply visual finishing to each exported clip; they do not create a timeline between separate clip files.\n- Thumbnail title overlays use Pillow when available; the source frame can still be extracted if Pillow is unavailable.\n- Active-speaker framing is experimental and should be reviewed manually before publishing.\n- Live deployment status must be checked in the Streamlit Community Cloud dashboard for the connected app; a successful GitHub syntax check does not prove that a deployed app starts or that video rendering works on the cloud host.\n\n## Privacy and rights
+## Current feature boundaries
+
+- The transition controls apply visual finishing to each exported clip; they do not create a timeline between separate clip files.
+- Thumbnail title overlays use Pillow when available; the source frame can still be extracted if Pillow is unavailable.
+- Active-speaker framing is experimental and should be reviewed manually before publishing.
+- Live deployment status must be checked in the Streamlit Community Cloud dashboard for the connected app; a successful GitHub syntax check does not prove that a deployed app starts or that video rendering works on the cloud host.
+
+## Privacy and rights
 
 Only upload or download videos you own or have permission to process. Do not put passwords, API keys, or other secrets in source code or public repository files.
