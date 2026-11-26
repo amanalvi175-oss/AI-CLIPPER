@@ -385,6 +385,73 @@ def metadata_for(text):
 
     return title, description, hashtags
 
+
+# ------------------- CLIP INTELLIGENCE ----------------------
+
+FILLER_WORDS = {"um", "uh", "erm", "hmm", "actually", "basically", "literally", "like", "youknow", "okayso"}
+HOOK_PATTERNS = (
+    r"\bhow to\b", r"\bwhy (?:you|we|they)\b",
+    r"\bthe truth about\b", r"\bhere(?:'s| is) why\b",
+    r"\bwhat happens when\b", r"\bthe biggest mistake\b",
+    r"\bmost people (?:don't|do not|never)\b",
+    r"\byou need to\b", r"\bstop doing\b", r"\bwatch what happens\b",
+)
+
+def analyze_transcript(segments):
+    """Transcript-only diagnostics; no visual or emotion recognition is claimed."""
+    text = " ".join(str(item.get("text", "")) for item in segments)
+    words = re.findall(r"\b[\w']+\b", text.lower())
+    filler_counts = {word: words.count(word) for word in sorted(FILLER_WORDS)}
+    filler_counts = {word: count for word, count in filler_counts.items() if count}
+    first = min((float(x.get("start", 0)) for x in segments), default=0)
+    last = max((float(x.get("end", 0)) for x in segments), default=0)
+    minutes = max((last - first) / 60.0, 1 / 60.0)
+    hooks = []
+    for item in segments:
+        line = str(item.get("text", "")).strip()
+        if len(re.findall(r"\b[\w']+\b", line)) < 4:
+            continue
+        matched = any(re.search(pattern, line.lower()) for pattern in HOOK_PATTERNS)
+        if matched or "?" in line or "!" in line:
+            hooks.append({"start": float(item.get("start", 0)), "end": float(item.get("end", 0)), "text": line, "type": "Hook phrase" if matched else "Question / emphasis"})
+    return {
+        "word_count": len(words), "filler_count": sum(filler_counts.values()),
+        "filler_rate": sum(filler_counts.values()) / max(len(words), 1) * 100,
+        "words_per_minute": len(words) / minutes,
+        "filler_counts": filler_counts, "hooks": hooks[:30],
+    }
+
+def clip_viral_score(clip, segments):
+    """0-100 editorial heuristic, not a prediction of platform views."""
+    selected = [item for item in segments if float(item.get("end", 0)) > float(clip["start"]) and float(item.get("start", 0)) < float(clip["end"])]
+    text = " ".join(str(item.get("text", "")) for item in selected).strip()
+    words = re.findall(r"\b[\w']+\b", text.lower())
+    if not words:
+        return 0, ["No transcript speech detected"]
+    score, reasons = 35.0, []
+    if any(re.search(pattern, text.lower()) for pattern in HOOK_PATTERNS):
+        score += 20
+        reasons.append("Strong hook phrase")
+    if "?" in text or "!" in text:
+        score += 8
+        reasons.append("Question or emphasis")
+    if any(word in HIGHLIGHT_WORDS for word in words):
+        score += 10
+        reasons.append("High-impact keywords")
+    if 12 <= len(words) <= 110:
+        score += 10
+        reasons.append("Concise short-form length")
+    elif len(words) > 180:
+        score -= 8
+        reasons.append("Dense transcript; consider tightening")
+    fillers = sum(1 for word in words if word in FILLER_WORDS)
+    if fillers:
+        score -= min(15, fillers * 2)
+        reasons.append(f"{fillers} possible filler word(s)")
+    if not reasons:
+        reasons.append("General transcript-based candidate")
+    return max(0, min(100, int(round(score)))), reasons
+
 # ----------------------- PROJECTS ---------------------------
 
 DEFAULTS = {
@@ -939,6 +1006,37 @@ elif page == "Project History":
                         except Exception as exc:
                             st.error(f"Could not open project: {exc}")
 
+elif page == "AI Intelligence":
+
+    st.header("AI transcript intelligence")
+    st.caption("Local transcript analysis: hook cues, filler-word counts and speaking pace. Scores are editorial heuristics, not guaranteed virality.")
+
+    if not st.session_state.transcript:
+        st.info("Import a video and generate subtitles first.")
+    else:
+        report = analyze_transcript(st.session_state.transcript)
+        a, b, c, d = st.columns(4)
+        a.metric("Words detected", report["word_count"])
+        b.metric("Speaking pace", f'{report["words_per_minute"]:.0f} WPM')
+        c.metric("Filler words", report["filler_count"])
+        d.metric("Filler rate", f'{report["filler_rate"]:.1f}%')
+
+        st.subheader("Possible hook moments")
+        if report["hooks"]:
+            for index, hook in enumerate(report["hooks"], 1):
+                with st.container(border=True):
+                    st.write(f'**{index}. {hook["start"]:.1f}s – {hook["end"]:.1f}s · {hook["type"]}**')
+                    st.write(hook["text"])
+        else:
+            st.info("No obvious hook phrases found. Review the transcript manually.")
+
+        st.subheader("Filler-word breakdown")
+        if report["filler_counts"]:
+            st.dataframe([{"Word": word, "Count": count} for word, count in report["filler_counts"].items()], use_container_width=True, hide_index=True)
+        else:
+            st.success("No common English filler words detected in the transcript.")
+        st.warning("Speech recognition can misclassify words, especially in mixed Hindi-English. Review before editing audio.")
+
 elif page == "Subtitles & Transcript":
 
     st.header("Subtitles and transcript")
@@ -1124,6 +1222,10 @@ elif page == "AI Highlights":
             ):
 
                 st.write(clip["text"])
+                viral_score, score_reasons = clip_viral_score(clip, st.session_state.transcript)
+                st.metric("Transcript-based editorial score", f"{viral_score}/100")
+                st.caption("Heuristic guidance only — not a prediction of views.")
+                st.write("**Score factors:** " + " · ".join(score_reasons))
                 st.caption("Review before exporting.")
 
 # ----------------------- CLIP EDITOR ------------------------
