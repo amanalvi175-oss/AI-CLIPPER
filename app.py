@@ -16,7 +16,7 @@ from faster_whisper import WhisperModel
 # Windows | Python 3.12 | CPU | INT8 | 8 GB RAM
 # ============================================================
 
-APP_NAME = "AI CLIPPER 5.1"
+APP_NAME = "AI CLIPPER 6.0 DEV"
 ROOT = Path("AI_CLIPPER_PROJECTS")
 ROOT.mkdir(exist_ok=True)
 
@@ -459,6 +459,37 @@ def load_project(project_path):
     st.session_state.exported = data.get("exported", [])
     st.session_state.last_import = data.get("last_import", "")
 
+
+def list_saved_projects():
+    """Return valid local projects, newest first, without loading their media."""
+    projects = []
+    if not ROOT.exists():
+        return projects
+
+    for folder in ROOT.iterdir():
+        if not folder.is_dir():
+            continue
+        metadata = folder / "project.json"
+        if not metadata.is_file():
+            continue
+        try:
+            data = json.loads(metadata.read_text(encoding="utf-8"))
+            video_name = data.get("video_name") or data.get("video_file") or folder.name
+            video_path = folder / data.get("video_file", "")
+            if not video_path.is_file():
+                continue
+            projects.append({
+                "path": str(folder),
+                "name": str(video_name),
+                "modified": metadata.stat().st_mtime,
+                "clips": len(data.get("clips", [])),
+                "exports": len(data.get("exported", [])),
+            })
+        except (OSError, ValueError, TypeError):
+            continue
+
+    return sorted(projects, key=lambda item: item["modified"], reverse=True)
+
 def create_project_from_upload(uploaded):
     project = Path(
         tempfile.mkdtemp(prefix="clipper_", dir=ROOT)
@@ -721,7 +752,7 @@ with st.sidebar:
     else:
         st.error("FFmpeg missing")
 
-st.title("🎬 AI CLIPPER 5.1")
+st.title("🎬 AI CLIPPER 6.0 DEV")
 st.caption(
     "Local-first video clipping and short-form content studio."
 )
@@ -877,6 +908,36 @@ elif page == "Import Video":
         st.video(st.session_state.video_path)
 
 # ----------------------- SUBTITLES --------------------------
+
+elif page == "Project History":
+
+    st.header("Project history")
+    st.caption("Reopen projects saved on the same machine or persistent storage.")
+
+    saved_projects = list_saved_projects()
+
+    if not saved_projects:
+        st.info("No saved projects found yet. Import a video and your project will appear here.")
+    else:
+        st.write(f"**{len(saved_projects)} saved project(s)**")
+        for index, item in enumerate(saved_projects):
+            with st.container(border=True):
+                left, right = st.columns([4, 1])
+                with left:
+                    st.subheader(item["name"])
+                    modified = __import__("datetime").datetime.fromtimestamp(item["modified"])
+                    st.caption(
+                        f'{item["clips"]} highlights · {item["exports"]} exports · '
+                        f'Last saved: {modified.strftime("%d %b %Y, %I:%M %p")}'
+                    )
+                with right:
+                    if st.button("Open project", key=f"open_saved_project_{index}", type="primary"):
+                        try:
+                            load_project(item["path"])
+                            st.success(f'Opened: {item["name"]}')
+                            st.rerun()
+                        except Exception as exc:
+                            st.error(f"Could not open project: {exc}")
 
 elif page == "Subtitles & Transcript":
 
@@ -1456,6 +1517,6 @@ elif page == "Settings":
 st.divider()
 
 st.caption(
-    "AI CLIPPER 5.1 | Single-file local edition | "
+     "AI CLIPPER 6.0 DEV | Single-file local edition | "
     "CPU INT8 | Review content before publishing."
 )
