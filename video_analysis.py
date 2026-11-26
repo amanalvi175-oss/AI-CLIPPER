@@ -93,3 +93,91 @@ def score_highlight_text(text):
         reasons.append("Has a clear list or step structure")
 
     return round(score, 2), reasons
+
+
+def build_keep_ranges(start, end, silence_ranges, pad=0.15, min_gap=0.25):
+    """Return source-time intervals to retain, preserving a small pause around speech."""
+    start, end = float(start), float(end)
+    if end <= start:
+        return []
+    cuts = []
+    for item in silence_ranges:
+        silence_start = max(start, float(item["start"]) + float(pad))
+        silence_end = min(end, float(item["end"]) - float(pad))
+        if silence_end - silence_start >= float(min_gap):
+            cuts.append((silence_start, silence_end))
+    cuts.sort()
+    merged = []
+    for left, right in cuts:
+        if merged and left <= merged[-1][1]:
+            merged[-1] = (merged[-1][0], max(merged[-1][1], right))
+        else:
+            merged.append((left, right))
+    keep = []
+    cursor = start
+    for left, right in merged:
+        if left > cursor:
+            keep.append((round(cursor, 3), round(left, 3)))
+        cursor = max(cursor, right)
+    if cursor < end:
+        keep.append((round(cursor, 3), round(end, 3)))
+    return [(a, b) for a, b in keep if b - a >= 0.08]
+
+
+def map_transcript_to_keep_ranges(segments, keep_ranges):
+    """Map original transcript timestamps onto the compacted output timeline."""
+    mapped = []
+    output_cursor = 0.0
+    for keep_start, keep_end in keep_ranges:
+        for segment in segments:
+            left = max(float(segment["start"]), keep_start)
+            right = min(float(segment["end"]), keep_end)
+            if right > left:
+                mapped.append({
+                    "start": round(output_cursor + left - keep_start, 3),
+                    "end": round(output_cursor + right - keep_start, 3),
+                    "text": segment.get("text", ""),
+                })
+        output_cursor += keep_end - keep_start
+    return sorted(mapped, key=lambda item: item["start"])
+
+
+def compact_video_with_ffmpeg(ffmpeg, video_path, keep_ranges, destination, include_audio=True):
+    """Render retained ranges and concatenate them into a single MP4."""
+    if not keep_ranges:
+        raise ValueError("No video sections remain after silence removal.")
+    graph = []
+    labels = []
+    for index, (start, end) in enumerate(keep_ranges):
+        graph.append(
+            f"[0:v]trim=start={float(start):.3f}:end={float(end):.3f},"
+            f"setpts=PTS-STARTPTS[v{index}]"
+        )
+        if include_audio:
+            graph.append(
+                f"[0:a:0]atrim=start={float(start):.3f}:end={float(end):.3f},"
+                f"asetpts=PTS-STARTPTS[a{index}]"
+            )
+            labels.extend([f"[v{index}]", f"[a{index}]"])
+        else:
+            labels.append(f"[v{index}]")
+    if include_audio:
+        graph.append(
+            "".join(labels) + f"concat=n={len(keep_ranges)}:v=1:a=1[vout][aout]"
+        )
+    else:
+        graph.append(
+            "".join(labels) + f"concat=n={len(keep_ranges)}:v=1:a=0[vout]"
+        )
+    command = ["-y", "-i", str(video_path), "-filter_complex", ";".join(graph),
+               "-map", "[vout]"]
+    if include_audio:
+        command += ["-map", "[aout]"]
+    command += ["-c:v", "libx264", "-preset", "ultrafast", "-crf", "23",
+                "-pix_fmt", "yuv420p"]
+    if include_audio:
+        command += ["-c:a", "aac", "-b:a", "128k"]
+    command += ["-movflags", "+faststart", str(destination)]
+    subprocess.run([ffmpeg, *command], stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                   text=True, encoding="utf-8", errors="replace", check=True)
+    return destination
