@@ -10,6 +10,7 @@ from pathlib import Path
 import streamlit as st
 import imageio_ffmpeg
 from faster_whisper import WhisperModel
+from video_analysis import detect_scene_changes, detect_silence_ranges, build_scene_clips
 
 # ============================================================
 # AI CLIPPER 5.1 - FINAL MASTER EDITION
@@ -582,7 +583,7 @@ def export_clip(
     if logo_path:
         logo_index = next_index
         next_index += 1
-        command += ["-i", str(logo_path)]
+        command += ["-loop", "1", "-i", str(logo_path)]
 
         graph += (
             f";[{logo_index}:v]scale=180:-1[brand];"
@@ -1064,6 +1065,45 @@ elif page == "AI Highlights":
 
                 st.write(clip["text"])
                 st.caption("Review before exporting.")
+
+
+# ----------------------- VIDEO ANALYSIS PAGE -----------------
+
+elif page == "Video Analysis":
+    st.header("Video intelligence")
+    if not st.session_state.video_path:
+        st.warning("Import or reopen a project first.")
+    else:
+        st.caption("FFmpeg scene-change and silence analysis. Results are estimates; review before editing.")
+        c1, c2 = st.columns(2)
+        with c1:
+            threshold = st.slider("Scene sensitivity", 0.15, 0.80, 0.35, 0.05)
+        with c2:
+            noise = st.slider("Silence threshold (dB)", -60, -15, -35, 1)
+        min_silence = st.slider("Minimum silence duration", 0.2, 3.0, 0.5, 0.1)
+        if st.button("Analyse scenes and silence", type="primary"):
+            try:
+                with st.spinner("Analysing video with FFmpeg..."):
+                    st.session_state.scene_points = detect_scene_changes(FFMPEG, st.session_state.video_path, threshold)
+                    duration = get_duration(st.session_state.video_path)
+                    st.session_state.silence_ranges = detect_silence_ranges(FFMPEG, st.session_state.video_path, noise, min_silence, duration)
+                st.success("Video analysis complete.")
+            except Exception as exc:
+                st.error(f"Analysis failed: {exc}")
+        scenes = st.session_state.get("scene_points", [])
+        silences = st.session_state.get("silence_ranges", [])
+        if scenes:
+            st.subheader("Detected scene changes")
+            st.write(", ".join(f"{p:.2f}s" for p in scenes))
+            if st.button("Create candidate clips from scenes"):
+                st.session_state.clips = build_scene_clips(scenes, get_duration(st.session_state.video_path))
+                save_project()
+                st.success(f"Created {len(st.session_state.clips)} scene-based candidates. Review them in Clip Editor & Export.")
+        if silences:
+            st.subheader("Detected silent sections")
+            st.dataframe(silences, use_container_width=True)
+        if not scenes and not silences:
+            st.info("Run the analysis to see scene changes and silent sections.")
 
 # ----------------------- CLIP EDITOR ------------------------
 
