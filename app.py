@@ -1489,7 +1489,8 @@ elif page == "Clip Editor & Export":
 
                 st.session_state["export_zoom"] = zoom_effect
                 st.session_state["export_progress"] = progress_bar
-                st.session_state["export_emoji"] = emoji_accent\n                st.session_state["export_transition"] = transition_style
+                st.session_state["export_emoji"] = emoji_accent
+                st.session_state["export_transition"] = transition_style
 
                 for i, clip in enumerate(
                     st.session_state.clips, 1
