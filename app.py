@@ -213,7 +213,8 @@ def transcribe(path, translate, progress, model_size):
 # ----------------------- VIDEO IMPORT -----------------------
 
 def import_from_url(url, project_dir, cookies_path=None):
-    """Download a user-authorized URL; optional cookies are temporary."""
+    """Download an authorized URL. Local mode can use the user's Chrome session."""
+    import os
     import yt_dlp
 
     require_ffmpeg()
@@ -235,6 +236,9 @@ def import_from_url(url, project_dir, cookies_path=None):
     }
     if cookies_path:
         options["cookiefile"] = str(cookies_path)
+    elif os.environ.get("AI_CLIPPER_LOCAL") == "1":
+        # Read cookies directly from the local Chrome profile; never upload them.
+        options["cookiesfrombrowser"] = ("chrome",)
 
     try:
         with yt_dlp.YoutubeDL(options) as ydl:
@@ -242,22 +246,24 @@ def import_from_url(url, project_dir, cookies_path=None):
     except Exception as exc:
         message = str(exc)
         lowered = message.lower()
-        if "sign in to confirm" in lowered or "not a bot" in lowered:
-            raise RuntimeError(
-                "YouTube requires a signed-in session. Upload a valid "
-                "Netscape-format YouTube-only cookies.txt from a disposable "
-                "account and retry. Never upload your main Google-account "
-                "or browser-wide cookies. YouTube may still reject cloud "
-                "downloads or require a PO Token; in that case use Computer "
-                "Upload or a direct MP4 URL."
-            ) from exc
-        if "403" in message or "forbidden" in lowered or "po token" in lowered:
-            raise RuntimeError(
-                "YouTube blocked the cloud download (HTTP 403/PO Token). "
-                "A cookies file may not be sufficient because YouTube can "
-                "bind playback to the same IP or require a PO Token. Use "
-                "Computer Upload or a direct MP4 URL for this video."
-            ) from exc
+        if ("sign in to confirm" in lowered or "not a bot" in lowered
+                or "403" in message or "forbidden" in lowered
+                or "po token" in lowered):
+            if os.environ.get("AI_CLIPPER_LOCAL") == "1":
+                hint = (
+                    "YouTube still blocked this local download. Close Chrome "
+                    "and retry, or use Computer Upload. Some videos also "
+                    "require a PO Token."
+                )
+            else:
+                hint = (
+                    "The hosted Streamlit server cannot access your local "
+                    "Chrome login session. For YouTube URLs, run AI CLIPPER "
+                    "locally on your Windows PC using run_local.bat; it reads "
+                    "your Chrome cookies locally and does not upload them. "
+                    "Or use Computer Upload/direct MP4 URL."
+                )
+            raise RuntimeError(hint) from exc
         raise RuntimeError(f"Video URL download failed: {message}") from exc
 
     candidates = [
@@ -1005,21 +1011,18 @@ elif page == "Import Video":
             "still fail if YouTube blocks the server or requires a PO Token."
         )
 
-        cookies_upload = st.file_uploader(
-            "Optional YouTube cookies.txt (Netscape format)",
-            type=["txt"],
-            key="youtube_cookies_upload",
-            help=(
-                "Sensitive login session data. Prefer a throwaway YouTube "
-                "account. Never upload your main Google-account cookies. "
-                "The file is used temporarily for this download attempt."
-            ),
-        )
-        if cookies_upload:
-            st.warning(
-                "Cookies can grant access to your Google/YouTube session. "
-                "Only use a disposable account's YouTube-only cookies file. "
-                "Do not upload your normal browser-wide cookies."
+        import os
+        if os.environ.get("AI_CLIPPER_LOCAL") == "1":
+            st.info(
+                "Local mode: YouTube downloads can use your Chrome session "
+                "directly on this PC. Your browser cookies are not uploaded."
+            )
+        else:
+            st.info(
+                "YouTube sign-in checks cannot use your PC's Chrome session "
+                "from Streamlit Cloud. For YouTube URLs, run this app locally "
+                "with run_local.bat. Computer Upload and direct MP4 URLs "
+                "continue to work here."
             )
 
         if st.button("Download and import", type="primary"):
