@@ -187,16 +187,20 @@ def transcribe(path, translate, progress, model_size):
         task=task,
         beam_size=1,
         vad_filter=True,
-        word_timestamps=False,
+        word_timestamps=True,
     )
 
     results = []
 
     for segment in segments_iter:
+        word_items = []
+        for word in (getattr(segment, "words", None) or []):
+            word_items.append({"start": float(word.start), "end": float(word.end), "word": str(word.word)})
         results.append({
             "start": float(segment.start),
             "end": float(segment.end),
             "text": segment.text.strip(),
+            "words": word_items,
         })
 
     progress.progress(100)
@@ -460,6 +464,59 @@ def create_project_from_upload(uploaded):
 
     save_project()
 
+
+def write_word_ass(segments, destination, offset=0.0, end=None, font_size=30, primary="#FFFFFF", highlight="#35E6FF"):
+    """Render timestamped words as individually highlighted ASS subtitle events."""
+    def ass_rgb(value):
+        value = str(value).lstrip("#")
+        if len(value) != 6: value = "FFFFFF"
+        return "&H00" + value[4:6] + value[2:4] + value[0:2]
+    def stamp(value):
+        value = max(0.0, float(value))
+        return f"{int(value//3600)}:{int((value%3600)//60):02}:{value%60:05.2f}"
+    header = (
+        "[Script Info]\nScriptType: v4.00+\nPlayResX: 720\nPlayResY: 1280\n"
+        "WrapStyle: 2\nScaledBorderAndShadow: yes\n\n[V4+ Styles]\n"
+        "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding\n"
+        f"Style: Word,Arial,{int(font_size)},{ass_rgb(primary)},{ass_rgb(highlight)},&H00000000,&H80000000,-1,0,1,3,1,2,35,35,105,1\n\n"
+        "[Events]\nFormat: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n"
+    )
+    lines = [header]
+    events = []
+    for segment in segments:
+        words = segment.get("words") or []
+        if words:
+            for word in words:
+                left = max(0.0, float(word.get("start", 0)) - offset)
+                right = float(word.get("end", 0)) - offset
+                token = str(word.get("word", "")).strip()
+                if end is not None: right = min(right, float(end) - offset)
+                if token and right > left:
+                    events.append((left, right, token))
+        else:
+            left = max(0.0, float(segment.get("start", 0)) - offset)
+            right = float(segment.get("end", 0)) - offset
+            token = str(segment.get("text", "")).strip()
+            if end is not None: right = min(right, float(end) - offset)
+            if token and right > left: events.append((left, right, token))
+    for left, right, token in sorted(events):
+        safe = token.replace("{", "(").replace("}", ")")
+        lines.append(f"Dialogue: 0,{stamp(left)},{stamp(right)},Word,,0,0,0,,{{\\c{ass_rgb(highlight)}\\fscx108\\fscy108}}{safe}\n")
+    Path(destination).write_text("".join(lines), encoding="utf-8-sig")
+    return destination
+
+
+def create_thumbnail(ffmpeg, video_path, timestamp, destination):
+    """Extract a representative frame for a clip thumbnail."""
+    subprocess.run([ffmpeg, "-y", "-ss", f"{max(0.0, float(timestamp)):.3f}", "-i", str(video_path),
+                    "-frames:v", "1", "-q:v", "2", str(destination)],
+                   stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True,
+                   text=True, encoding="utf-8", errors="replace")
+    if not Path(destination).exists() or Path(destination).stat().st_size == 0:
+        raise RuntimeError("Thumbnail frame could not be generated.")
+    return destination
+
+
 # ----------------------- CLIP EXPORT -----------------------
 
 def ass_color(hex_color):
@@ -539,7 +596,11 @@ def export_clip(
     current = "base"
 
     if burn_subtitles:
-        sub_path = ffmpeg_filter_path(srt_path)
+        word_ass = export_dir / f"clip_{number:02}_words.ass"
+        write_word_ass(all_segments, word_ass, offset=start, end=end,
+                       font_size=max(18, int(subtitle_size) + 8),
+                       primary=subtitle_color)
+        sub_path = ffmpeg_filter_path(word_ass)
         color = ass_color(subtitle_color)
 
         graph += (
@@ -1503,6 +1564,21 @@ elif page == "Content Studio":
                     "Review and edit before publishing."
                 )
 
+                if st.button("Generate thumbnail", key=f"thumb_{i}"):
+                    try:
+                        thumb_dir = Path(st.session_state.project_dir) / "THUMBNAILS"
+                        thumb_dir.mkdir(exist_ok=True)
+                        thumb_path = thumb_dir / f"clip_{i:02}_thumbnail.jpg"
+                        create_thumbnail(FFMPEG, st.session_state.video_path,
+                                         (float(clip["start"]) + float(clip["end"])) / 2,
+                                         thumb_path)
+                        st.image(str(thumb_path), caption=f"Thumbnail for clip {i}")
+                        st.download_button("Download thumbnail", thumb_path.read_bytes(),
+                                           file_name=thumb_path.name, mime="image/jpeg",
+                                           key=f"thumb_dl_{i}")
+                    except Exception as exc:
+                        st.error(f"Thumbnail generation failed: {exc}")
+
 # ----------------------- PUBLISHING -------------------------
 
 elif page == "Publishing":
@@ -1596,6 +1672,6 @@ elif page == "Settings":
 st.divider()
 
 st.caption(
-    "AI CLIPPER 5.1 | Single-file local edition | "
+    "AI CLIPPER 5.2 | Word captions and thumbnail tools | "
     "CPU INT8 | Review content before publishing."
 )
