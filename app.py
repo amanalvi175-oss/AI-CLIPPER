@@ -706,6 +706,7 @@ with st.sidebar:
             "Import Video",
             "Subtitles & Transcript",
             "AI Highlights",
+            "Video Analysis",
             "Clip Editor & Export",
             "Content Studio",
             "Publishing",
@@ -1116,6 +1117,48 @@ elif page == "Clip Editor & Export":
         st.warning("Find highlights first.")
 
     else:
+
+        st.subheader("Trim and review clips")
+        try:
+            source_duration = get_duration(st.session_state.video_path)
+        except Exception:
+            source_duration = max(float(c.get("end", 0)) for c in st.session_state.clips)
+
+        st.caption("Adjust each clip's start and end time before exporting. Changes are saved to this project.")
+        for clip_index, clip in enumerate(st.session_state.clips):
+            clip_start = max(0.0, min(float(clip.get("start", 0.0)), source_duration))
+            clip_end = max(clip_start, min(float(clip.get("end", source_duration)), source_duration))
+            with st.expander(
+                f"Edit clip {clip_index + 1} | {clip_start:.1f}s–{clip_end:.1f}s",
+                expanded=False,
+            ):
+                start_col, end_col = st.columns(2)
+                with start_col:
+                    edited_start = st.number_input(
+                        "Start time (seconds)",
+                        min_value=0.0,
+                        max_value=float(max(0.1, source_duration)),
+                        value=float(clip_start),
+                        step=0.1,
+                        key=f"trim_start_{clip_index}",
+                    )
+                with end_col:
+                    edited_end = st.number_input(
+                        "End time (seconds)",
+                        min_value=0.0,
+                        max_value=float(max(0.1, source_duration)),
+                        value=float(clip_end),
+                        step=0.1,
+                        key=f"trim_end_{clip_index}",
+                    )
+                if st.button("Apply trim", key=f"apply_trim_{clip_index}"):
+                    if edited_end <= edited_start:
+                        st.error("End time must be greater than start time.")
+                    else:
+                        st.session_state.clips[clip_index]["start"] = float(edited_start)
+                        st.session_state.clips[clip_index]["end"] = float(edited_end)
+                        save_project()
+                        st.success("Clip timing updated and saved.")
 
         aspect_label = st.selectbox(
             "Output format",
