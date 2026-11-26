@@ -16,7 +16,7 @@ from faster_whisper import WhisperModel
 # Windows | Python 3.12 | CPU | INT8 | 8 GB RAM
 # ============================================================
 
-APP_NAME = "AI CLIPPER 5.1"
+APP_NAME = "AI CLIPPER 6.0 DEV"
 ROOT = Path("AI_CLIPPER_PROJECTS")
 ROOT.mkdir(exist_ok=True)
 
@@ -115,6 +115,39 @@ def has_audio(path):
     )
 
     return bool(re.search(r"Audio:", proc.stderr))
+
+def detect_silence(path, noise_db=-35, min_duration=0.5):
+    """Detect quiet audio intervals with FFmpeg; does not modify the source."""
+    require_ffmpeg()
+    if not has_audio(path):
+        return []
+    proc = subprocess.run(
+        [FFMPEG, "-hide_banner", "-i", str(path),
+         "-af", f"silencedetect=noise={float(noise_db):.1f}dB:d={float(min_duration):.2f}",
+         "-f", "null", "-"],
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+        encoding="utf-8", errors="replace",
+    )
+    if proc.returncode != 0:
+        raise RuntimeError(proc.stderr[-3000:] or "Silence analysis failed.")
+    events = [(m.group(1), float(m.group(2))) for m in
+              re.finditer(r"silence_(start|end):\s*([0-9.]+)", proc.stderr)]
+    intervals, open_start = [], None
+    for kind, timestamp in events:
+        if kind == "start":
+            open_start = timestamp
+        elif kind == "end" and open_start is not None:
+            if timestamp > open_start:
+                intervals.append({"start": open_start, "end": timestamp, "duration": timestamp - open_start})
+            open_start = None
+    if open_start is not None:
+        try:
+            final_duration = get_duration(path)
+            if final_duration > open_start:
+                intervals.append({"start": open_start, "end": final_duration, "duration": final_duration - open_start})
+        except Exception:
+            pass
+    return intervals
 
 def ffmpeg_filter_path(path):
     value = str(Path(path).resolve()).replace("\\", "/")
@@ -385,6 +418,73 @@ def metadata_for(text):
 
     return title, description, hashtags
 
+
+# ------------------- CLIP INTELLIGENCE ----------------------
+
+FILLER_WORDS = {"um", "uh", "erm", "hmm", "actually", "basically", "literally", "like", "youknow", "okayso"}
+HOOK_PATTERNS = (
+    r"\bhow to\b", r"\bwhy (?:you|we|they)\b",
+    r"\bthe truth about\b", r"\bhere(?:'s| is) why\b",
+    r"\bwhat happens when\b", r"\bthe biggest mistake\b",
+    r"\bmost people (?:don't|do not|never)\b",
+    r"\byou need to\b", r"\bstop doing\b", r"\bwatch what happens\b",
+)
+
+def analyze_transcript(segments):
+    """Transcript-only diagnostics; no visual or emotion recognition is claimed."""
+    text = " ".join(str(item.get("text", "")) for item in segments)
+    words = re.findall(r"\b[\w']+\b", text.lower())
+    filler_counts = {word: words.count(word) for word in sorted(FILLER_WORDS)}
+    filler_counts = {word: count for word, count in filler_counts.items() if count}
+    first = min((float(x.get("start", 0)) for x in segments), default=0)
+    last = max((float(x.get("end", 0)) for x in segments), default=0)
+    minutes = max((last - first) / 60.0, 1 / 60.0)
+    hooks = []
+    for item in segments:
+        line = str(item.get("text", "")).strip()
+        if len(re.findall(r"\b[\w']+\b", line)) < 4:
+            continue
+        matched = any(re.search(pattern, line.lower()) for pattern in HOOK_PATTERNS)
+        if matched or "?" in line or "!" in line:
+            hooks.append({"start": float(item.get("start", 0)), "end": float(item.get("end", 0)), "text": line, "type": "Hook phrase" if matched else "Question / emphasis"})
+    return {
+        "word_count": len(words), "filler_count": sum(filler_counts.values()),
+        "filler_rate": sum(filler_counts.values()) / max(len(words), 1) * 100,
+        "words_per_minute": len(words) / minutes,
+        "filler_counts": filler_counts, "hooks": hooks[:30],
+    }
+
+def clip_viral_score(clip, segments):
+    """0-100 editorial heuristic, not a prediction of platform views."""
+    selected = [item for item in segments if float(item.get("end", 0)) > float(clip["start"]) and float(item.get("start", 0)) < float(clip["end"])]
+    text = " ".join(str(item.get("text", "")) for item in selected).strip()
+    words = re.findall(r"\b[\w']+\b", text.lower())
+    if not words:
+        return 0, ["No transcript speech detected"]
+    score, reasons = 35.0, []
+    if any(re.search(pattern, text.lower()) for pattern in HOOK_PATTERNS):
+        score += 20
+        reasons.append("Strong hook phrase")
+    if "?" in text or "!" in text:
+        score += 8
+        reasons.append("Question or emphasis")
+    if any(word in HIGHLIGHT_WORDS for word in words):
+        score += 10
+        reasons.append("High-impact keywords")
+    if 12 <= len(words) <= 110:
+        score += 10
+        reasons.append("Concise short-form length")
+    elif len(words) > 180:
+        score -= 8
+        reasons.append("Dense transcript; consider tightening")
+    fillers = sum(1 for word in words if word in FILLER_WORDS)
+    if fillers:
+        score -= min(15, fillers * 2)
+        reasons.append(f"{fillers} possible filler word(s)")
+    if not reasons:
+        reasons.append("General transcript-based candidate")
+    return max(0, min(100, int(round(score)))), reasons
+
 # ----------------------- PROJECTS ---------------------------
 
 DEFAULTS = {
@@ -459,6 +559,37 @@ def load_project(project_path):
     st.session_state.exported = data.get("exported", [])
     st.session_state.last_import = data.get("last_import", "")
 
+
+def list_saved_projects():
+    """Return valid local projects, newest first, without loading their media."""
+    projects = []
+    if not ROOT.exists():
+        return projects
+
+    for folder in ROOT.iterdir():
+        if not folder.is_dir():
+            continue
+        metadata = folder / "project.json"
+        if not metadata.is_file():
+            continue
+        try:
+            data = json.loads(metadata.read_text(encoding="utf-8"))
+            video_name = data.get("video_name") or data.get("video_file") or folder.name
+            video_path = folder / data.get("video_file", "")
+            if not video_path.is_file():
+                continue
+            projects.append({
+                "path": str(folder),
+                "name": str(video_name),
+                "modified": metadata.stat().st_mtime,
+                "clips": len(data.get("clips", [])),
+                "exports": len(data.get("exported", [])),
+            })
+        except (OSError, ValueError, TypeError):
+            continue
+
+    return sorted(projects, key=lambda item: item["modified"], reverse=True)
+
 def create_project_from_upload(uploaded):
     project = Path(
         tempfile.mkdtemp(prefix="clipper_", dir=ROOT)
@@ -478,6 +609,41 @@ def create_project_from_upload(uploaded):
 
 # ----------------------- CLIP EXPORT -----------------------
 
+def create_thumbnail(video, timestamp, destination, width=1280):
+    """Extract a clean JPG frame from the source video using FFmpeg."""
+    require_ffmpeg()
+    destination = Path(destination)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    run_ffmpeg([
+        "-y", "-ss", f"{max(0.0, float(timestamp)):.3f}",
+        "-i", str(video), "-frames:v", "1",
+        "-vf", f"scale={int(width)}:-2",
+        "-q:v", "2", str(destination),
+    ])
+    if not destination.is_file() or destination.stat().st_size == 0:
+        raise RuntimeError("FFmpeg did not create the thumbnail.")
+    return destination
+
+
+def build_script_outline(transcript):
+    """Create an editable outline from transcript text; not generative AI."""
+    lines = [str(x.get("text", "")).strip() for x in transcript if str(x.get("text", "")).strip()]
+    if not lines:
+        return "No transcript available."
+    hook = next((line for line in lines if "?" in line or any(
+        phrase in line.lower() for phrase in ("how to", "the truth", "you need to", "stop doing")
+    )), lines[0])
+    middle = lines[1:4]
+    points = [f"- {line}" for line in middle] if middle else [
+        "- Explain the main idea and give one practical example."
+    ]
+    ending = lines[-1] if len(lines) > 1 else "Summarize the key takeaway."
+    return "\n".join(
+        ["HOOK", hook, "", "MAIN POINTS"] + points +
+        ["", "CLOSING", ending, "", "CTA",
+         "Ask viewers to comment with their experience or share the video."]
+    )
+
 def ass_color(hex_color):
     value = hex_color.lstrip("#")
 
@@ -495,6 +661,7 @@ def export_clip(
     crop_mode="Center crop", fade_seconds=0.0,
     music_path=None, logo_path=None,
     mix_original_audio=True, music_volume=0.12,
+    subtitle_preset="Classic",
 ):
     require_ffmpeg()
 
@@ -549,14 +716,24 @@ def export_clip(
         sub_path = ffmpeg_filter_path(srt_path)
         color = ass_color(subtitle_color)
 
+        preset_styles = {
+            "Classic": ("Arial", 1, 2, 55),
+            "Bold Creator": ("Arial", 1, 3, 85),
+            "Minimal": ("Arial", 0, 1, 42),
+            "Top Caption": ("Arial", 1, 3, 90),
+        }
+        font_name, is_bold, outline_size, margin_v = preset_styles.get(
+            subtitle_preset, preset_styles["Classic"]
+        )
+        alignment = 8 if subtitle_preset == "Top Caption" else 2
         graph += (
             f";[{current}]subtitles='{sub_path}':"
-            f"force_style='FontName=Arial,"
-            f"FontSize={int(subtitle_size)},Bold=1,"
+            f"force_style='FontName={font_name},"
+            f"FontSize={int(subtitle_size)},Bold={is_bold},"
             f"PrimaryColour={color},"
             f"OutlineColour=&H00000000,"
-            f"Outline={int(subtitle_outline)},"
-            f"Shadow=1,Alignment=2,MarginV=55'[subbed]"
+            f"Outline={max(int(subtitle_outline), outline_size)},"
+            f"Shadow=1,Alignment={alignment},MarginV={margin_v}'[subbed]"
         )
 
         current = "subbed"
@@ -703,8 +880,12 @@ with st.sidebar:
         [
             "Dashboard",
             "Import Video",
+            "Project History",
             "Subtitles & Transcript",
+            "AI Intelligence",
+            "Silence Analysis",
             "AI Highlights",
+            "Thumbnail Studio",
             "Clip Editor & Export",
             "Content Studio",
             "Publishing",
@@ -721,7 +902,7 @@ with st.sidebar:
     else:
         st.error("FFmpeg missing")
 
-st.title("🎬 AI CLIPPER 5.1")
+st.title("🎬 AI CLIPPER 6.0 DEV")
 st.caption(
     "Local-first video clipping and short-form content studio."
 )
@@ -877,6 +1058,109 @@ elif page == "Import Video":
         st.video(st.session_state.video_path)
 
 # ----------------------- SUBTITLES --------------------------
+
+elif page == "Project History":
+
+    st.header("Project history")
+    st.caption("Reopen projects saved on the same machine or persistent storage.")
+
+    saved_projects = list_saved_projects()
+
+    if not saved_projects:
+        st.info("No saved projects found yet. Import a video and your project will appear here.")
+    else:
+        st.write(f"**{len(saved_projects)} saved project(s)**")
+        for index, item in enumerate(saved_projects):
+            with st.container(border=True):
+                left, right = st.columns([4, 1])
+                with left:
+                    st.subheader(item["name"])
+                    modified = __import__("datetime").datetime.fromtimestamp(item["modified"])
+                    st.caption(
+                        f'{item["clips"]} highlights · {item["exports"]} exports · '
+                        f'Last saved: {modified.strftime("%d %b %Y, %I:%M %p")}'
+                    )
+                with right:
+                    if st.button("Open project", key=f"open_saved_project_{index}", type="primary"):
+                        try:
+                            load_project(item["path"])
+                            st.success(f'Opened: {item["name"]}')
+                            st.rerun()
+                        except Exception as exc:
+                            st.error(f"Could not open project: {exc}")
+
+elif page == "AI Intelligence":
+
+    st.header("AI transcript intelligence")
+    st.caption("Local transcript analysis: hook cues, filler-word counts and speaking pace. Scores are editorial heuristics, not guaranteed virality.")
+
+    if not st.session_state.transcript:
+        st.info("Import a video and generate subtitles first.")
+    else:
+        report = analyze_transcript(st.session_state.transcript)
+        a, b, c, d = st.columns(4)
+        a.metric("Words detected", report["word_count"])
+        b.metric("Speaking pace", f'{report["words_per_minute"]:.0f} WPM')
+        c.metric("Filler words", report["filler_count"])
+        d.metric("Filler rate", f'{report["filler_rate"]:.1f}%')
+
+        st.subheader("Possible hook moments")
+        if report["hooks"]:
+            for index, hook in enumerate(report["hooks"], 1):
+                with st.container(border=True):
+                    st.write(f'**{index}. {hook["start"]:.1f}s – {hook["end"]:.1f}s · {hook["type"]}**')
+                    st.write(hook["text"])
+        else:
+            st.info("No obvious hook phrases found. Review the transcript manually.")
+
+        st.subheader("Filler-word breakdown")
+        if report["filler_counts"]:
+            st.dataframe([{"Word": word, "Count": count} for word, count in report["filler_counts"].items()], use_container_width=True, hide_index=True)
+        else:
+            st.success("No common English filler words detected in the transcript.")
+        st.warning("Speech recognition can misclassify words, especially in mixed Hindi-English. Review before editing audio.")
+
+elif page == "Silence Analysis":
+
+    st.header("Silence analysis")
+    st.caption("Find quiet gaps in the source audio. This report does not modify the original video.")
+
+    if not st.session_state.video_path:
+        st.info("Import or reopen a project first.")
+    elif not has_audio(st.session_state.video_path):
+        st.warning("No audio stream was detected in this video.")
+    else:
+        noise_db = st.slider("Silence threshold (dB)", -60, -15, -35, 1)
+        min_gap = st.slider("Minimum quiet gap (seconds)", 0.2, 3.0, 0.5, 0.1)
+        if st.button("Analyze quiet gaps", type="primary"):
+            try:
+                with st.spinner("Analyzing audio with FFmpeg..."):
+                    gaps = detect_silence(st.session_state.video_path, noise_db, min_gap)
+                st.session_state["silence_report"] = gaps
+                st.success(f"Analysis complete: {len(gaps)} quiet interval(s) found.")
+            except Exception as exc:
+                st.error(f"Silence analysis failed: {exc}")
+        gaps = st.session_state.get("silence_report")
+        if gaps is not None:
+            duration = get_duration(st.session_state.video_path)
+            total_quiet = sum(item["duration"] for item in gaps)
+            first, second, third = st.columns(3)
+            first.metric("Quiet intervals", len(gaps))
+            second.metric("Total quiet time", f"{total_quiet:.1f}s")
+            third.metric("Share of video", f"{(total_quiet / max(duration, 0.001) * 100):.1f}%")
+            if gaps:
+                st.dataframe(
+                    [{"Start (s)": round(x["start"], 2), "End (s)": round(x["end"], 2), "Duration (s)": round(x["duration"], 2)} for x in gaps],
+                    use_container_width=True, hide_index=True,
+                )
+                csv_rows = ["start_seconds,end_seconds,duration_seconds"] + [
+                    f'{x["start"]:.3f},{x["end"]:.3f},{x["duration"]:.3f}' for x in gaps
+                ]
+                st.download_button("Download quiet-gap report (CSV)", data="\n".join(csv_rows),
+                                   file_name="silence_report.csv", mime="text/csv")
+                st.warning("Detection may flag pauses, soft speech or background ambience. Listen before deciding to cut anything.")
+            else:
+                st.success("No quiet intervals matched these settings.")
 
 elif page == "Subtitles & Transcript":
 
@@ -1051,6 +1335,11 @@ elif page == "AI Highlights":
             except Exception as exc:
                 st.error(str(exc))
 
+        try:
+            source_duration = get_duration(st.session_state.video_path)
+        except Exception:
+            source_duration = max(float(item.get("end", 0)) for item in st.session_state.clips)
+
         for i, clip in enumerate(
             st.session_state.clips, 1
         ):
@@ -1063,9 +1352,107 @@ elif page == "AI Highlights":
             ):
 
                 st.write(clip["text"])
+                viral_score, score_reasons = clip_viral_score(clip, st.session_state.transcript)
+                st.metric("Transcript-based editorial score", f"{viral_score}/100")
+                st.caption("Heuristic guidance only — not a prediction of views.")
+                st.write("**Score factors:** " + " · ".join(score_reasons))
+
+                st.markdown("**Fine-tune this clip**")
+                edit_left, edit_right = st.columns(2)
+                with edit_left:
+                    edited_start = st.number_input(
+                        "Start time (seconds)", min_value=0.0,
+                        max_value=max(0.1, float(source_duration) - 0.1),
+                        value=min(float(clip["start"]), max(0.0, float(source_duration) - 0.1)),
+                        step=0.1, key=f"highlight_start_{i}",
+                    )
+                with edit_right:
+                    edited_end = st.number_input(
+                        "End time (seconds)", min_value=0.1,
+                        max_value=max(0.1, float(source_duration)),
+                        value=min(float(clip["end"]), max(0.1, float(source_duration))),
+                        step=0.1, key=f"highlight_end_{i}",
+                    )
+                if edited_end > edited_start:
+                    if (edited_start != float(clip["start"]) or
+                            edited_end != float(clip["end"])):
+                        clip["start"] = float(edited_start)
+                        clip["end"] = float(edited_end)
+                        save_project()
+                        st.caption("Updated clip timing is saved to this project.")
+                else:
+                    st.warning("End time must be later than start time.")
+
                 st.caption("Review before exporting.")
 
 # ----------------------- CLIP EDITOR ------------------------
+
+elif page == "Thumbnail Studio":
+
+    st.header("Thumbnail studio")
+    st.caption("Extract a frame from each selected highlight. Add your own title later in an image editor if needed.")
+
+    if not st.session_state.clips or not st.session_state.video_path:
+        st.info("Import a video and find highlights first.")
+    else:
+        clip_labels = [
+            f"Clip {i + 1} · {item['start']:.1f}s–{item['end']:.1f}s"
+            for i, item in enumerate(st.session_state.clips)
+        ]
+        selected_index = st.selectbox(
+            "Choose highlight", range(len(clip_labels)),
+            format_func=lambda index: clip_labels[index],
+        )
+        selected_clip = st.session_state.clips[selected_index]
+        default_time = (float(selected_clip["start"]) + float(selected_clip["end"])) / 2
+        frame_time = st.slider(
+            "Thumbnail frame time (seconds)",
+            float(selected_clip["start"]), float(selected_clip["end"]),
+            float(default_time), 0.1,
+        )
+        thumb_width = st.select_slider("Image width", options=[640, 960, 1280, 1920], value=1280)
+        if st.button("Generate thumbnail", type="primary"):
+            try:
+                folder = Path(st.session_state.project_dir) / "EXPORTS" / "THUMBNAILS"
+                target = folder / f"clip_{selected_index + 1:02}_thumbnail.jpg"
+                with st.spinner("Extracting video frame..."):
+                    created = create_thumbnail(st.session_state.video_path, frame_time, target, thumb_width)
+                st.session_state["last_thumbnail_path"] = str(created)
+                st.success("Thumbnail created.")
+            except Exception as exc:
+                st.error(f"Thumbnail generation failed: {exc}")
+
+        if st.button("Generate thumbnails for ALL highlights"):
+            try:
+                folder = Path(st.session_state.project_dir) / "EXPORTS" / "THUMBNAILS"
+                folder.mkdir(parents=True, exist_ok=True)
+                generated = []
+                progress = st.progress(0)
+                with st.spinner("Creating one thumbnail per highlight..."):
+                    for index, item in enumerate(st.session_state.clips, 1):
+                        midpoint = (float(item["start"]) + float(item["end"])) / 2
+                        target = folder / f"clip_{index:02}_thumbnail.jpg"
+                        generated.append(create_thumbnail(st.session_state.video_path, midpoint, target, thumb_width))
+                        progress.progress(index / len(st.session_state.clips))
+                bundle = folder / "ALL_THUMBNAILS.zip"
+                with zipfile.ZipFile(bundle, "w", zipfile.ZIP_DEFLATED) as archive:
+                    for image_path in generated:
+                        archive.write(image_path, image_path.name)
+                st.success(f"Created {len(generated)} thumbnails.")
+                st.download_button(
+                    "Download all thumbnails (ZIP)", data=bundle.read_bytes(),
+                    file_name=bundle.name, mime="application/zip",
+                )
+            except Exception as exc:
+                st.error(f"Batch thumbnail generation failed: {exc}")
+
+        last_thumb = st.session_state.get("last_thumbnail_path")
+        if last_thumb and Path(last_thumb).is_file():
+            st.image(last_thumb, caption=Path(last_thumb).name, use_container_width=True)
+            st.download_button(
+                "Download thumbnail (JPG)", data=Path(last_thumb).read_bytes(),
+                file_name=Path(last_thumb).name, mime="image/jpeg",
+            )
 
 elif page == "Clip Editor & Export":
 
@@ -1109,6 +1496,12 @@ elif page == "Clip Editor & Export":
 
         subtitle_outline = st.slider(
             "Subtitle outline thickness", 0, 5, 2
+        )
+
+        subtitle_preset = st.selectbox(
+            "Caption style preset",
+            ["Classic", "Bold Creator", "Minimal", "Top Caption"],
+            help="Applies a readable subtitle layout. Word-by-word animation is not included.",
         )
 
         fade_seconds = st.slider(
@@ -1214,6 +1607,7 @@ elif page == "Clip Editor & Export":
                         logo_path,
                         mix_audio,
                         music_volume,
+                        subtitle_preset,
                     )
 
                     completed.append(str(output))
@@ -1301,6 +1695,17 @@ elif page == "Clip Editor & Export":
 elif page == "Content Studio":
 
     st.header("Content studio")
+
+    if st.session_state.transcript:
+        with st.expander("Editable script outline from transcript"):
+            outline = build_script_outline(st.session_state.transcript)
+            st.text_area("Script outline", outline, height=220, key="generated_script_outline")
+            st.download_button(
+                "Download script outline (TXT)",
+                data=st.session_state.get("generated_script_outline", outline),
+                file_name="script_outline.txt",
+                mime="text/plain",
+            )
 
     if not st.session_state.clips:
 
@@ -1456,6 +1861,6 @@ elif page == "Settings":
 st.divider()
 
 st.caption(
-    "AI CLIPPER 5.1 | Single-file local edition | "
+     "AI CLIPPER 6.0 DEV | Single-file local edition | "
     "CPU INT8 | Review content before publishing."
 )
