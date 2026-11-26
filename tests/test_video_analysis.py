@@ -1,7 +1,7 @@
 import unittest
 from unittest.mock import patch, Mock
 
-from video_analysis import build_scene_clips, detect_silence_ranges, score_highlight_text
+from video_analysis import build_scene_clips, detect_scene_changes, detect_silence_ranges, score_highlight_text
 
 
 class VideoAnalysisTests(unittest.TestCase):
@@ -45,6 +45,17 @@ class VideoAnalysisTests(unittest.TestCase):
         result = map_transcript_to_keep_ranges(source, [(0, 5), (10, 15)])
         self.assertEqual(result[0], {"start": 1.0, "end": 3.0, "text": "hello"})
         self.assertEqual(result[1], {"start": 5.0, "end": 6.0, "text": "world"})
+
+    @patch("video_analysis.subprocess.run")
+    def test_scene_change_timestamps_are_parsed_and_deduplicated(self, run):
+        run.return_value = Mock(stderr="pts_time:1.234\\npts_time:1.300\\npts_time:3.500\\n")
+        result = detect_scene_changes("ffmpeg", "video.mp4", max_points=10)
+        self.assertEqual(result, [1.23, 3.5])
+
+    def test_highlight_score_counts_words(self):
+        score, reasons = score_highlight_text("You should learn why this important lesson matters.")
+        self.assertGreater(score, 0)
+        self.assertTrue(any("Substantial spoken content" in reason for reason in reasons))
 
 
 if __name__ == "__main__":
