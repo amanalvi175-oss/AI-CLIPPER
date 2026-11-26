@@ -1032,26 +1032,9 @@ elif page == "Import Video":
                 project = Path(
                     tempfile.mkdtemp(prefix="clipper_", dir=ROOT)
                 )
-                cookies_path = None
                 try:
-                    if cookies_upload:
-                        raw_cookies = cookies_upload.getvalue()
-                        header = raw_cookies[:300].decode("utf-8", errors="ignore")
-                        if not (
-                            "# Netscape HTTP Cookie File" in header
-                            or "# HTTP Cookie File" in header
-                        ):
-                            raise ValueError(
-                                "Invalid cookies file. Export it in "
-                                "Netscape cookies.txt format."
-                            )
-                        cookies_path = project / "temporary_youtube_cookies.txt"
-                        cookies_path.write_bytes(raw_cookies)
-
                     with st.spinner("Downloading video..."):
-                        video, title = import_from_url(
-                            url.strip(), project, cookies_path
-                        )
+                        video, title = import_from_url(url.strip(), project)
 
                     reset_project_state()
                     st.session_state.project_dir = str(project)
@@ -1063,9 +1046,6 @@ elif page == "Import Video":
                     st.rerun()
                 except Exception as exc:
                     st.error(f"Import failed: {exc}")
-                finally:
-                    if cookies_path and cookies_path.exists():
-                        cookies_path.unlink(missing_ok=True)
 
     if st.session_state.video_path:
         st.divider()
