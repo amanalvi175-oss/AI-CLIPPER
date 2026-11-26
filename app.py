@@ -609,6 +609,39 @@ def create_project_from_upload(uploaded):
 
 # ----------------------- CLIP EXPORT -----------------------
 
+def create_thumbnail(video, timestamp, destination, width=1280):
+    """Extract a clean JPG frame from the source video using FFmpeg."""
+    require_ffmpeg()
+    destination = Path(destination)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    run_ffmpeg([
+        "-y", "-ss", f"{max(0.0, float(timestamp)):.3f}",
+        "-i", str(video), "-frames:v", "1",
+        "-vf", f"scale={int(width)}:-2",
+        "-q:v", "2", str(destination),
+    ])
+    if not destination.is_file() or destination.stat().st_size == 0:
+        raise RuntimeError("FFmpeg did not create the thumbnail.")
+    return destination
+
+
+def build_script_outline(transcript):
+    """Create an editable outline from transcript text; not generative AI."""
+    lines = [str(x.get("text", "")).strip() for x in transcript if str(x.get("text", "")).strip()]
+    if not lines:
+        return "No transcript available."
+    hook = next((line for line in lines if "?" in line or any(
+        phrase in line.lower() for phrase in ("how to", "the truth", "you need to", "stop doing")
+    )), lines[0])
+    middle = lines[1:4]
+    ending = lines[-1] if len(lines) > 1 else "Summarize the key takeaway."
+    return "\n".join([
+        "HOOK", hook, "",
+        "MAIN POINTS", *[f"- {line}" for line in middle] if middle else ["- Explain the main idea and give one practical example."],
+        "", "CLOSING", ending,
+        "", "CTA", "Ask viewers to comment with their experience or share the video.",
+    ])
+
 def ass_color(hex_color):
     value = hex_color.lstrip("#")
 
@@ -839,6 +872,7 @@ with st.sidebar:
             "AI Intelligence",
             "Silence Analysis",
             "AI Highlights",
+            "Thumbnail Studio",
             "Clip Editor & Export",
             "Content Studio",
             "Publishing",
@@ -1308,6 +1342,49 @@ elif page == "AI Highlights":
 
 # ----------------------- CLIP EDITOR ------------------------
 
+elif page == "Thumbnail Studio":
+
+    st.header("Thumbnail studio")
+    st.caption("Extract a frame from each selected highlight. Add your own title later in an image editor if needed.")
+
+    if not st.session_state.clips or not st.session_state.video_path:
+        st.info("Import a video and find highlights first.")
+    else:
+        clip_labels = [
+            f"Clip {i + 1} · {item['start']:.1f}s–{item['end']:.1f}s"
+            for i, item in enumerate(st.session_state.clips)
+        ]
+        selected_index = st.selectbox(
+            "Choose highlight", range(len(clip_labels)),
+            format_func=lambda index: clip_labels[index],
+        )
+        selected_clip = st.session_state.clips[selected_index]
+        default_time = (float(selected_clip["start"]) + float(selected_clip["end"])) / 2
+        frame_time = st.slider(
+            "Thumbnail frame time (seconds)",
+            float(selected_clip["start"]), float(selected_clip["end"]),
+            float(default_time), 0.1,
+        )
+        thumb_width = st.select_slider("Image width", options=[640, 960, 1280, 1920], value=1280)
+        if st.button("Generate thumbnail", type="primary"):
+            try:
+                folder = Path(st.session_state.project_dir) / "EXPORTS" / "THUMBNAILS"
+                target = folder / f"clip_{selected_index + 1:02}_thumbnail.jpg"
+                with st.spinner("Extracting video frame..."):
+                    created = create_thumbnail(st.session_state.video_path, frame_time, target, thumb_width)
+                st.session_state["last_thumbnail_path"] = str(created)
+                st.success("Thumbnail created.")
+            except Exception as exc:
+                st.error(f"Thumbnail generation failed: {exc}")
+
+        last_thumb = st.session_state.get("last_thumbnail_path")
+        if last_thumb and Path(last_thumb).is_file():
+            st.image(last_thumb, caption=Path(last_thumb).name, use_container_width=True)
+            st.download_button(
+                "Download thumbnail (JPG)", data=Path(last_thumb).read_bytes(),
+                file_name=Path(last_thumb).name, mime="image/jpeg",
+            )
+
 elif page == "Clip Editor & Export":
 
     st.header("Clip editor and export")
@@ -1542,6 +1619,17 @@ elif page == "Clip Editor & Export":
 elif page == "Content Studio":
 
     st.header("Content studio")
+
+    if st.session_state.transcript:
+        with st.expander("Editable script outline from transcript"):
+            outline = build_script_outline(st.session_state.transcript)
+            st.text_area("Script outline", outline, height=220, key="generated_script_outline")
+            st.download_button(
+                "Download script outline (TXT)",
+                data=st.session_state.get("generated_script_outline", outline),
+                file_name="script_outline.txt",
+                mime="text/plain",
+            )
 
     if not st.session_state.clips:
 
