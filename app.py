@@ -212,12 +212,11 @@ def transcribe(path, translate, progress, model_size):
 
 # ----------------------- VIDEO IMPORT -----------------------
 
-def import_from_url(url, project_dir):
-    """Download a video URL with yt-dlp's current YouTube JS support."""
+def import_from_url(url, project_dir, cookies_path=None):
+    """Download a user-authorized URL; optional cookies are temporary."""
     import yt_dlp
 
     require_ffmpeg()
-
     options = {
         "format": "bestvideo*+bestaudio/best",
         "outtmpl": str(project_dir / "source.%(ext)s"),
@@ -231,12 +230,11 @@ def import_from_url(url, project_dir):
         "extractor_retries": 3,
         "socket_timeout": 30,
         "cachedir": False,
-        # Prefer YouTube's Safari HLS formats, which currently avoid the
-        # GVS PO-token requirement affecting many standard format URLs.
         "extractor_args": {"youtube": {"player_client": ["web_safari"]}},
-        # Allow yt-dlp to obtain its maintained EJS challenge scripts.
         "remote_components": ["ejs:npm"],
     }
+    if cookies_path:
+        options["cookiefile"] = str(cookies_path)
 
     try:
         with yt_dlp.YoutubeDL(options) as ydl:
@@ -244,24 +242,30 @@ def import_from_url(url, project_dir):
     except Exception as exc:
         message = str(exc)
         lowered = message.lower()
+        if "sign in to confirm" in lowered or "not a bot" in lowered:
+            raise RuntimeError(
+                "YouTube requires a signed-in session. Upload a valid "
+                "Netscape-format YouTube-only cookies.txt from a disposable "
+                "account and retry. Never upload your main Google-account "
+                "or browser-wide cookies. YouTube may still reject cloud "
+                "downloads or require a PO Token; in that case use Computer "
+                "Upload or a direct MP4 URL."
+            ) from exc
         if "403" in message or "forbidden" in lowered or "po token" in lowered:
             raise RuntimeError(
-                "YouTube still refused this cloud download (HTTP 403). "
-                "The app now uses yt-dlp's JavaScript challenge support and "
-                "the web_safari HLS client, but YouTube may still require a "
-                "video-specific PO Token or block the Streamlit cloud IP. "
-                "Use Computer Upload or a direct MP4 URL for this video."
+                "YouTube blocked the cloud download (HTTP 403/PO Token). "
+                "A cookies file may not be sufficient because YouTube can "
+                "bind playback to the same IP or require a PO Token. Use "
+                "Computer Upload or a direct MP4 URL for this video."
             ) from exc
         raise RuntimeError(f"Video URL download failed: {message}") from exc
 
     candidates = [
         p for p in project_dir.glob("source.*")
-        if p.is_file()
-        and p.suffix.lower() not in {".part", ".ytdl"}
+        if p.is_file() and p.suffix.lower() not in {".part", ".ytdl"}
     ]
     if not candidates:
         raise RuntimeError("Download completed but no video file was created.")
-
     candidates.sort(key=lambda p: p.stat().st_size, reverse=True)
     return candidates[0], info.get("title") or candidates[0].stem
 
@@ -997,22 +1001,54 @@ elif page == "Import Video":
 
         st.caption(
             "Only download videos you own or have permission to use. "
-            "YouTube imports use the cloud downloader and may still be blocked "
-            "by YouTube; direct MP4 links are more reliable."
+            "YouTube may require a signed-in session; cloud downloads can "
+            "still fail if YouTube blocks the server or requires a PO Token."
         )
 
-        if st.button(
-            "Download and import", type="primary"
-        ):
+        cookies_upload = st.file_uploader(
+            "Optional YouTube cookies.txt (Netscape format)",
+            type=["txt"],
+            key="youtube_cookies_upload",
+            help=(
+                "Sensitive login session data. Prefer a throwaway YouTube "
+                "account. Never upload your main Google-account cookies. "
+                "The file is used temporarily for this download attempt."
+            ),
+        )
+        if cookies_upload:
+            st.warning(
+                "Cookies can grant access to your Google/YouTube session. "
+                "Only use a disposable account's YouTube-only cookies file. "
+                "Do not upload your normal browser-wide cookies."
+            )
+
+        if st.button("Download and import", type="primary"):
             if not url.strip():
                 st.warning("Paste a URL first.")
             else:
                 project = Path(
                     tempfile.mkdtemp(prefix="clipper_", dir=ROOT)
                 )
+                cookies_path = None
                 try:
+                    if cookies_upload:
+                        raw_cookies = cookies_upload.getvalue()
+                        header = raw_cookies[:300].decode("utf-8", errors="ignore")
+                        if not (
+                            "# Netscape HTTP Cookie File" in header
+                            or "# HTTP Cookie File" in header
+                        ):
+                            raise ValueError(
+                                "Invalid cookies file. Export it in "
+                                "Netscape cookies.txt format."
+                            )
+                        cookies_path = project / "temporary_youtube_cookies.txt"
+                        cookies_path.write_bytes(raw_cookies)
+
                     with st.spinner("Downloading video..."):
-                        video, title = import_from_url(url.strip(), project)
+                        video, title = import_from_url(
+                            url.strip(), project, cookies_path
+                        )
 
                     reset_project_state()
                     st.session_state.project_dir = str(project)
@@ -1020,11 +1056,13 @@ elif page == "Import Video":
                     st.session_state.video_name = title
                     st.session_state.last_import = "Video URL"
                     save_project()
-
                     st.success("Video imported successfully.")
                     st.rerun()
                 except Exception as exc:
                     st.error(f"Import failed: {exc}")
+                finally:
+                    if cookies_path and cookies_path.exists():
+                        cookies_path.unlink(missing_ok=True)
 
     if st.session_state.video_path:
         st.divider()
