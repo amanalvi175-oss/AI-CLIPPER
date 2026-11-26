@@ -13,7 +13,7 @@ from faster_whisper import WhisperModel
 from video_analysis import detect_scene_changes, detect_silence_ranges, build_scene_clips, score_highlight_text, build_keep_ranges, map_transcript_to_keep_ranges, compact_video_with_ffmpeg, detect_face_centers, detect_active_speaker_centers, build_face_crop_expression
 
 # ============================================================
-# AI CLIPPER 5.1 - FINAL MASTER EDITION
+# AI CLIPPER 5.3 - FINAL MASTER EDITION
 # Windows | Python 3.12 | CPU | INT8 | 8 GB RAM
 # ============================================================
 
@@ -386,7 +386,27 @@ DEFAULTS = {
     "last_import": "",
 }
 
-def reset_project_state():
+
+PREFERENCES_PATH = ROOT / "editing_preferences.json"
+
+def load_editing_preferences():
+    try:
+        value = json.loads(PREFERENCES_PATH.read_text(encoding="utf-8"))
+        return value if isinstance(value, dict) else {}
+    except Exception:
+        return {}
+
+def save_editing_preferences(values):
+    allowed = {"aspect_label", "crop_mode", "crop_position", "face_follow", "active_speaker",
+               "remove_silence", "burn", "subtitle_size", "subtitle_color", "subtitle_outline",
+               "fade_seconds", "zoom_effect", "progress_bar", "emoji_accent", "transition_style"}
+    data = {key: values[key] for key in allowed if key in values}
+    temporary = PREFERENCES_PATH.with_suffix(".tmp")
+    temporary.write_text(json.dumps(data, indent=2), encoding="utf-8")
+    temporary.replace(PREFERENCES_PATH)
+    return data
+
+\ndef reset_project_state():
     for key, value in DEFAULTS.items():
         st.session_state[key] = value
 
@@ -611,6 +631,14 @@ def export_clip(
     if zoom_effect:
         graph += f";[{current}]scale=iw*1.06:ih*1.06,crop=iw/1.06:ih/1.06,setsar=1[zoomed]"
         current = "zoomed"
+
+    transition_style = st.session_state.get("export_transition", "Fade")
+    if transition_style == "Soft vignette":
+        graph += f";[{current}]vignette=PI/5[vignette]"
+        current = "vignette"
+    elif transition_style == "Flash intro":
+        graph += f";[{current}]fade=t=in:st=0:d=0.18:color=white[flash]"
+        current = "flash"
 
     if progress_bar:
         graph += f";[{current}]drawbox=x=0:y=ih-10:w='iw*t/{max(duration, 0.1):.3f}':h=10:color=0x35E6FF@0.95:t=fill[progress]"
@@ -1294,25 +1322,31 @@ elif page == "Clip Editor & Export":
         )
 
         subtitle_size = st.slider(
-            "Subtitle font size", 14, 42, 22
+            "Subtitle font size", 14, 42, int(EDITING_PREFERENCES.get("subtitle_size", 22))
         )
 
         subtitle_color = st.color_picker(
-            "Subtitle colour", "#FFFFFF"
+            "Subtitle colour", EDITING_PREFERENCES.get("subtitle_color", "#FFFFFF")
         )
 
         subtitle_outline = st.slider(
-            "Subtitle outline thickness", 0, 5, 2
+            "Subtitle outline thickness", 0, 5, int(EDITING_PREFERENCES.get("subtitle_outline", 2))
         )
 
         fade_seconds = st.slider(
             "Fade in/out seconds",
-            0.0, 1.5, 0.3, 0.1,
+            0.0, 1.5, float(EDITING_PREFERENCES.get("fade_seconds", 0.3)), 0.1,
+        )
+        transition_options = ["Fade", "Soft vignette", "Flash intro", "None"]
+        saved_transition = EDITING_PREFERENCES.get("transition_style", "Fade")
+        transition_style = st.selectbox(
+            "Transition / visual finish", transition_options,
+            index=transition_options.index(saved_transition) if saved_transition in transition_options else 0,
         )
 
-        zoom_effect = st.checkbox("Subtle cinematic zoom", value=False)
-        progress_bar = st.checkbox("Add animated bottom progress bar", value=True)
-        emoji_accent = st.checkbox("Add sparkle accent overlay", value=False,
+        zoom_effect = st.checkbox("Subtle cinematic zoom", value=bool(EDITING_PREFERENCES.get("zoom_effect", False)))
+        progress_bar = st.checkbox("Add animated bottom progress bar", value=bool(EDITING_PREFERENCES.get("progress_bar", True)))
+        emoji_accent = st.checkbox("Add sparkle accent overlay", value=bool(EDITING_PREFERENCES.get("emoji_accent", False)),
                                    help="Uses FFmpeg drawtext; may depend on available fonts.")
 
         music_upload = st.file_uploader(
@@ -1339,6 +1373,22 @@ elif page == "Clip Editor & Export":
                 "Background music volume",
                 0.0, 1.0, 0.12, 0.05,
             )
+
+        if st.button("Save these editing preferences"):
+            try:
+                save_editing_preferences({
+                    "aspect_label": aspect_label, "crop_mode": crop_mode,
+                    "crop_position": crop_position, "face_follow": face_follow,
+                    "active_speaker": active_speaker, "remove_silence": remove_silence,
+                    "burn": burn, "subtitle_size": subtitle_size,
+                    "subtitle_color": subtitle_color, "subtitle_outline": subtitle_outline,
+                    "fade_seconds": fade_seconds, "zoom_effect": zoom_effect,
+                    "progress_bar": progress_bar, "emoji_accent": emoji_accent,
+                    "transition_style": transition_style,
+                })
+                st.success("Editing preferences saved for this app instance.")
+            except Exception as exc:
+                st.error(f"Could not save preferences: {exc}")
 
         if st.button(
             "Generate all clips", type="primary"
@@ -1397,7 +1447,7 @@ elif page == "Clip Editor & Export":
 
                 st.session_state["export_zoom"] = zoom_effect
                 st.session_state["export_progress"] = progress_bar
-                st.session_state["export_emoji"] = emoji_accent
+                st.session_state["export_emoji"] = emoji_accent\n                st.session_state["export_transition"] = transition_style
 
                 for i, clip in enumerate(
                     st.session_state.clips, 1
@@ -1712,6 +1762,6 @@ elif page == "Settings":
 st.divider()
 
 st.caption(
-    "AI CLIPPER 5.2 | Word captions and thumbnail tools | "
+    "AI CLIPPER 5.3 | Presets, transitions and creator thumbnails | "
     "CPU INT8 | Review content before publishing."
 )
