@@ -342,8 +342,8 @@ def find_highlights(
 
 def metadata_for(text):
     """Create editable, transcript-grounded metadata without paid APIs."""
-    raw = re.sub(r"\\s+", " ", str(text)).strip()
-    words = re.findall(r"\\b[a-zA-Z0-9']+\\b", raw)
+    raw = re.sub(r"\s+", " ", str(text)).strip()
+    words = re.findall(r"\b[a-zA-Z0-9']+\b", raw)
     stop = {
         "this", "that", "with", "from", "your", "you", "the", "and",
         "for", "are", "was", "were", "have", "has", "had", "what",
@@ -358,7 +358,7 @@ def metadata_for(text):
             counts[key] = counts.get(key, 0) + 1
     topics = sorted(counts, key=counts.get, reverse=True)[:5] or ["video", "highlights"]
     first_sentence = re.split(r"(?<=[.!?])\\s+", raw)[0] if raw else ""
-    title_words = re.findall(r"\\b[a-zA-Z0-9']+\\b", first_sentence)[:10]
+    title_words = re.findall(r"\b[a-zA-Z0-9']+\b", first_sentence)[:10]
     title = " ".join(title_words).strip().rstrip(".,!?")
     if len(title) < 12:
         title = " ".join(w.title() for w in topics[:3])
@@ -368,8 +368,8 @@ def metadata_for(text):
     summary = raw[:220].rsplit(" ", 1)[0] if len(raw) > 220 else raw
     description = (
         (summary or "A short highlight from this video.")
-        + "\\n\\nKey topics: " + ", ".join(topics[:3])
-        + "\\n\\n" + hashtags
+        + "\n\nKey topics: " + ", ".join(topics[:3])
+        + "\n\n" + hashtags
     )
     return title, description, hashtags
 
@@ -1315,12 +1315,11 @@ elif page == "Clip Editor & Export":
 
         if aspect_label.startswith("9:16"):
 
+            crop_modes = ["Center crop", "Fit with blurred background"]
+            saved_crop_mode = EDITING_PREFERENCES.get("crop_mode", "Center crop")
             crop_mode = st.selectbox(
-                "Vertical framing",
-                [
-                    "Center crop",
-                    "Fit with blurred background",
-                ],
+                "Vertical framing", crop_modes,
+                index=crop_modes.index(saved_crop_mode) if saved_crop_mode in crop_modes else 0,
             )
             if crop_mode == "Center crop":
                 crop_position = st.slider(
@@ -1330,18 +1329,18 @@ elif page == "Clip Editor & Export":
                 ) / 100.0
                 face_follow = st.checkbox(
                     "Experimental AI face-follow framing",
-                    value=False,
+                    value=bool(EDITING_PREFERENCES.get("face_follow", False)),
                     help="Uses lightweight CPU face detection to keep the largest visible face in frame. Sampling may miss profiles, poor lighting or multiple speakers.",
                 )
                 active_speaker = st.checkbox(
                     "Experimental active-speaker framing (mouth-motion estimate)",
-                    value=False,
+                    value=bool(EDITING_PREFERENCES.get("active_speaker", False)),
                     help="Tracks the face with strongest mouth-region movement. This is a visual heuristic, not voice diarization; multiple faces and camera movement can confuse it.",
                 )
 
         remove_silence = st.checkbox(
             "Automatically remove long silent gaps",
-            value=False,
+            value=bool(EDITING_PREFERENCES.get("remove_silence", False)),
             help="Cuts detected silence while keeping a short pause around speech. This adds processing time.",
         )
         silence_threshold = -35
@@ -1356,7 +1355,7 @@ elif page == "Clip Editor & Export":
 
         burn = st.checkbox(
             "Burn subtitles into video",
-            value=True,
+            value=bool(EDITING_PREFERENCES.get("burn", True)),
         )
 
         subtitle_size = st.slider(
