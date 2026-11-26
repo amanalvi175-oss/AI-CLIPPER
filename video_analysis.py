@@ -257,3 +257,60 @@ def build_face_crop_expression(face_points):
     first_t, first_x = points[0]
     expression = f"if(lt(t,{first_t:.3f}),{first_x:.4f}*in_w-out_w/2,{expression})"
     return f"max(0,min(in_w-out_w,{expression}))"
+
+def detect_active_speaker_centers(video_path, start_time=0.0, end_time=None,
+                                  sample_interval=0.35, max_samples=240):
+    """Estimate the speaking face from mouth-region motion; heuristic, not diarization."""
+    try:
+        import cv2
+    except ImportError as exc:
+        raise RuntimeError("Active-speaker framing requires OpenCV.") from exc
+    cap = cv2.VideoCapture(str(video_path))
+    if not cap.isOpened():
+        raise RuntimeError("Could not open video for active-speaker analysis.")
+    detector = cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_frontalface_default.xml")
+    fps = cap.get(cv2.CAP_PROP_FPS) or 25.0
+    frames = cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0
+    duration = frames / fps if frames else 0.0
+    begin = max(0.0, float(start_time))
+    finish = min(float(end_time), duration) if end_time is not None and duration else (float(end_time) if end_time is not None else duration)
+    if finish <= begin:
+        cap.release()
+        return []
+    count = min(int(max_samples), max(2, int((finish-begin)/max(0.1, sample_interval))+1))
+    times = [begin + i*(finish-begin)/max(1,count-1) for i in range(count)]
+    previous, scores, output = {}, {}, []
+    try:
+        for timestamp in times:
+            cap.set(cv2.CAP_PROP_POS_MSEC, timestamp*1000.0)
+            ok, frame = cap.read()
+            if not ok:
+                continue
+            h, w = frame.shape[:2]
+            if w > 960:
+                scale = 960.0/w
+                frame = cv2.resize(frame, (960, max(1, int(h*scale))))
+                h, w = frame.shape[:2]
+            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+            faces = detector.detectMultiScale(gray, scaleFactor=1.12, minNeighbors=5, minSize=(40,40))
+            candidates = []
+            for x, y, fw, fh in faces:
+                cx = (x + fw/2) / w
+                mouth = gray[int(y+fh*0.58):min(h,int(y+fh*0.92)), int(x+fw*0.18):min(w,int(x+fw*0.82))]
+                if mouth.size == 0:
+                    continue
+                patch = cv2.resize(mouth, (32,16))
+                key = round(cx,1)
+                prior = min(previous, key=lambda k: abs(k-key)) if previous else None
+                motion = 0.0
+                if prior is not None and abs(prior-key) < 0.18:
+                    motion = float(cv2.absdiff(patch, previous[prior]).mean())
+                scores[key] = scores.get(key,0.0)*0.72 + motion
+                previous[key] = patch
+                candidates.append((scores[key],cx))
+            if candidates:
+                _, cx = max(candidates, key=lambda item:item[0])
+                output.append((round(timestamp-begin,3), round(float(cx),4)))
+    finally:
+        cap.release()
+    return output
