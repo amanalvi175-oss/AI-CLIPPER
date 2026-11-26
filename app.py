@@ -212,7 +212,12 @@ def transcribe(path, translate, progress, model_size):
 
 # ----------------------- VIDEO IMPORT -----------------------
 
-def import_from_url(url, project_dir):
+def import_from_url(url, project_dir, cookies_path=None):
+    """Download a user-authorized video URL with yt-dlp.
+
+    Cookies are optional and are used only for this download attempt.
+    The caller is responsible for deleting the temporary cookies file.
+    """
     import yt_dlp
 
     require_ffmpeg()
@@ -225,12 +230,33 @@ def import_from_url(url, project_dir):
         "no_warnings": True,
         "merge_output_format": "mp4",
         "ffmpeg_location": FFMPEG,
-        "retries": 3,
-        "fragment_retries": 3,
+        "retries": 5,
+        "fragment_retries": 5,
+        "extractor_retries": 3,
+        "socket_timeout": 30,
+        "cachedir": False,
     }
 
-    with yt_dlp.YoutubeDL(options) as ydl:
-        info = ydl.extract_info(url, download=True)
+    if cookies_path:
+        options["cookiefile"] = str(cookies_path)
+
+    try:
+        with yt_dlp.YoutubeDL(options) as ydl:
+            info = ydl.extract_info(url, download=True)
+    except Exception as exc:
+        message = str(exc)
+        lowered = message.lower()
+        if "403" in message or "forbidden" in lowered or "po token" in lowered:
+            raise RuntimeError(
+                "YouTube refused the cloud download (HTTP 403). "
+                "If this is your video or you have permission, export a "
+                "Netscape-format cookies.txt from your own browser and upload "
+                "it in the optional cookies field, then retry. Cookies are "
+                "used for this attempt only and are not saved in the project. "
+                "If YouTube still requires a PO Token, use Computer Upload "
+                "or a direct MP4 URL instead."
+            ) from exc
+        raise RuntimeError(f"Video URL download failed: {message}") from exc
 
     candidates = [
         p for p in project_dir.glob("source.*")
@@ -239,13 +265,9 @@ def import_from_url(url, project_dir):
     ]
 
     if not candidates:
-        raise RuntimeError("Video download did not produce a file.")
+        raise RuntimeError("Download completed but no video file was created.")
 
-    candidates.sort(
-        key=lambda p: p.stat().st_size,
-        reverse=True,
-    )
-
+    candidates.sort(key=lambda p: p.stat().st_size, reverse=True)
     return candidates[0], info.get("title") or candidates[0].stem
 
 # ----------------------- HIGHLIGHTS -------------------------
@@ -981,6 +1003,24 @@ elif page == "Import Video":
         st.caption(
             "Only download videos you own or have permission to use."
         )
+        cookies_upload = st.file_uploader(
+            "Optional: upload browser cookies.txt (Netscape format) for sites "
+            "that require sign-in",
+            type=["txt"],
+            help=(
+                "Only use a cookies file from your own account and only for "
+                "videos you are authorized to download. Cookies can grant "
+                "access to your account. They are used for this download "
+                "attempt and deleted afterward; never share them with anyone."
+            ),
+            key="url_cookies_upload",
+        )
+        if cookies_upload:
+            st.warning(
+                "Account cookies are sensitive. Use a temporary export, "
+                "never upload or share this file elsewhere, and revoke the "
+                "session afterward if you are unsure."
+            )
 
         if st.button(
             "Download and import", type="primary"
@@ -995,11 +1035,16 @@ elif page == "Import Video":
                         prefix="clipper_", dir=ROOT
                     )
                 )
+                cookies_path = None
 
                 try:
+                    if cookies_upload:
+                        cookies_path = project / "temporary_cookies.txt"
+                        cookies_path.write_bytes(cookies_upload.getvalue())
+
                     with st.spinner("Downloading video..."):
                         video, title = import_from_url(
-                            url.strip(), project
+                            url.strip(), project, cookies_path
                         )
 
                     reset_project_state()
@@ -1016,6 +1061,9 @@ elif page == "Import Video":
 
                 except Exception as exc:
                     st.error(f"Import failed: {exc}")
+                finally:
+                    if cookies_path and cookies_path.exists():
+                        cookies_path.unlink(missing_ok=True)
 
     if st.session_state.video_path:
         st.divider()
