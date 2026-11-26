@@ -357,7 +357,7 @@ def metadata_for(text):
         if len(key) > 3 and key not in stop:
             counts[key] = counts.get(key, 0) + 1
     topics = sorted(counts, key=counts.get, reverse=True)[:5] or ["video", "highlights"]
-    first_sentence = re.split(r"(?<=[.!?])\\s+", raw)[0] if raw else ""
+    first_sentence = re.split(r"(?<=[.!?])\s+", raw)[0] if raw else ""
     title_words = re.findall(r"\b[a-zA-Z0-9']+\b", first_sentence)[:10]
     title = " ".join(title_words).strip().rstrip(".,!?")
     if len(title) < 12:
