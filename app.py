@@ -212,12 +212,8 @@ def transcribe(path, translate, progress, model_size):
 
 # ----------------------- VIDEO IMPORT -----------------------
 
-def import_from_url(url, project_dir, cookies_path=None):
-    """Download a user-authorized video URL with yt-dlp.
-
-    Cookies are optional and are used only for this download attempt.
-    The caller is responsible for deleting the temporary cookies file.
-    """
+def import_from_url(url, project_dir):
+    """Download a video URL with yt-dlp's current YouTube JS support."""
     import yt_dlp
 
     require_ffmpeg()
@@ -235,10 +231,12 @@ def import_from_url(url, project_dir, cookies_path=None):
         "extractor_retries": 3,
         "socket_timeout": 30,
         "cachedir": False,
+        # Prefer YouTube's Safari HLS formats, which currently avoid the
+        # GVS PO-token requirement affecting many standard format URLs.
+        "extractor_args": {"youtube": {"player_client": ["web_safari"]}},
+        # Allow yt-dlp to obtain its maintained EJS challenge scripts.
+        "remote_components": ["ejs:npm"],
     }
-
-    if cookies_path:
-        options["cookiefile"] = str(cookies_path)
 
     try:
         with yt_dlp.YoutubeDL(options) as ydl:
@@ -248,13 +246,11 @@ def import_from_url(url, project_dir, cookies_path=None):
         lowered = message.lower()
         if "403" in message or "forbidden" in lowered or "po token" in lowered:
             raise RuntimeError(
-                "YouTube refused the cloud download (HTTP 403). "
-                "If this is your video or you have permission, export a "
-                "Netscape-format cookies.txt from your own browser and upload "
-                "it in the optional cookies field, then retry. Cookies are "
-                "used for this attempt only and are not saved in the project. "
-                "If YouTube still requires a PO Token, use Computer Upload "
-                "or a direct MP4 URL instead."
+                "YouTube still refused this cloud download (HTTP 403). "
+                "The app now uses yt-dlp's JavaScript challenge support and "
+                "the web_safari HLS client, but YouTube may still require a "
+                "video-specific PO Token or block the Streamlit cloud IP. "
+                "Use Computer Upload or a direct MP4 URL for this video."
             ) from exc
         raise RuntimeError(f"Video URL download failed: {message}") from exc
 
@@ -263,7 +259,6 @@ def import_from_url(url, project_dir, cookies_path=None):
         if p.is_file()
         and p.suffix.lower() not in {".part", ".ytdl"}
     ]
-
     if not candidates:
         raise RuntimeError("Download completed but no video file was created.")
 
@@ -1001,69 +996,35 @@ elif page == "Import Video":
         url = st.text_input("Paste a supported video URL")
 
         st.caption(
-            "Only download videos you own or have permission to use."
+            "Only download videos you own or have permission to use. "
+            "YouTube imports use the cloud downloader and may still be blocked "
+            "by YouTube; direct MP4 links are more reliable."
         )
-        cookies_upload = st.file_uploader(
-            "Optional: upload browser cookies.txt (Netscape format) for sites "
-            "that require sign-in",
-            type=["txt"],
-            help=(
-                "Only use a cookies file from your own account and only for "
-                "videos you are authorized to download. Cookies can grant "
-                "access to your account. They are used for this download "
-                "attempt and deleted afterward; never share them with anyone."
-            ),
-            key="url_cookies_upload",
-        )
-        if cookies_upload:
-            st.warning(
-                "Account cookies are sensitive. Use a temporary export, "
-                "never upload or share this file elsewhere, and revoke the "
-                "session afterward if you are unsure."
-            )
 
         if st.button(
             "Download and import", type="primary"
         ):
-
             if not url.strip():
                 st.warning("Paste a URL first.")
-
             else:
                 project = Path(
-                    tempfile.mkdtemp(
-                        prefix="clipper_", dir=ROOT
-                    )
+                    tempfile.mkdtemp(prefix="clipper_", dir=ROOT)
                 )
-                cookies_path = None
-
                 try:
-                    if cookies_upload:
-                        cookies_path = project / "temporary_cookies.txt"
-                        cookies_path.write_bytes(cookies_upload.getvalue())
-
                     with st.spinner("Downloading video..."):
-                        video, title = import_from_url(
-                            url.strip(), project, cookies_path
-                        )
+                        video, title = import_from_url(url.strip(), project)
 
                     reset_project_state()
-
                     st.session_state.project_dir = str(project)
                     st.session_state.video_path = str(video)
                     st.session_state.video_name = title
                     st.session_state.last_import = "Video URL"
-
                     save_project()
 
                     st.success("Video imported successfully.")
                     st.rerun()
-
                 except Exception as exc:
                     st.error(f"Import failed: {exc}")
-                finally:
-                    if cookies_path and cookies_path.exists():
-                        cookies_path.unlink(missing_ok=True)
 
     if st.session_state.video_path:
         st.divider()
