@@ -48,3 +48,48 @@ def build_scene_clips(scene_points, total_duration, before=2.0, after=18.0, limi
         if len(clips) >= int(limit):
             break
     return clips
+
+
+
+HOOK_PHRASES = (
+    "the biggest mistake", "here is why", "here's why",
+    "the truth is", "what if", "how to", "you need to",
+    "stop doing", "never do", "the reason", "this is why",
+    "the secret", "most people", "nobody tells you",
+)
+ENGAGEMENT_WORDS = {
+    "you", "your", "because", "but", "however", "actually",
+    "secret", "mistake", "warning", "important", "truth",
+    "best", "worst", "never", "always", "why", "how",
+    "learn", "tip", "lesson", "solution", "avoid", "stop",
+    "start", "change", "success", "fail", "money",
+}
+
+
+def score_highlight_text(text):
+    """Return a transparent editorial score; it is not a prediction of virality."""
+    value = str(text).lower()
+    words = re.findall(r"\\b[\\w']+\\b", value)
+    reasons = []
+    score = min(len(words) / 12.0, 2.5)
+
+    if len(words) >= 8:
+        reasons.append("Substantial spoken content")
+    if any(phrase in value for phrase in HOOK_PHRASES):
+        score += 2.0
+        reasons.append("Contains a strong hook phrase")
+    matched = sorted({word for word in words if word in ENGAGEMENT_WORDS})
+    if matched:
+        score += min(len(matched) * 0.45, 2.25)
+        reasons.append("Engaging language: " + ", ".join(matched[:4]))
+    if "?" in value:
+        score += 0.8
+        reasons.append("Uses a question to create curiosity")
+    if "!" in value:
+        score += 0.4
+        reasons.append("Emphatic delivery in transcript")
+    if any(term in value for term in ("first", "second", "third", "step", "number one")):
+        score += 0.5
+        reasons.append("Has a clear list or step structure")
+
+    return round(score, 2), reasons
