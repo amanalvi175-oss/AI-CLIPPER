@@ -10,7 +10,7 @@ from pathlib import Path
 import streamlit as st
 import imageio_ffmpeg
 from faster_whisper import WhisperModel
-from video_analysis import detect_scene_changes, detect_silence_ranges, build_scene_clips
+from video_analysis import detect_scene_changes, detect_silence_ranges, build_scene_clips, score_highlight_text
 
 # ============================================================
 # AI CLIPPER 5.1 - FINAL MASTER EDITION
@@ -258,24 +258,7 @@ HIGHLIGHT_WORDS = {
 }
 
 def segment_score(segment):
-    text = segment["text"].lower()
-    words = re.findall(r"\b[\w']+\b", text)
-
-    score = min(len(words) / 16, 3.0)
-
-    score += sum(
-        1.8 for word in HIGHLIGHT_WORDS
-        if re.search(rf"\b{re.escape(word)}\b", text)
-    )
-
-    score += 1.0 if "?" in text or "!" in text else 0
-
-    score += (
-        0.4
-        if any(w in text for w in ("you", "your", "because"))
-        else 0
-    )
-
+    score, _ = score_highlight_text(segment.get("text", ""))
     return score
 
 def find_highlights(
@@ -534,7 +517,7 @@ def export_clip(
             graph = (
                 "[0:v]scale=720:1280:"
                 "force_original_aspect_ratio=increase,"
-                "crop=720:1280,setsar=1[base]"
+                f"crop=720:1280:x=(in_w-out_w)*{max(0.0, min(1.0, float(crop_position))):.3f}:y=(in_h-out_h)/2,setsar=1[base]"
             )
     else:
         graph = (
@@ -1166,6 +1149,7 @@ elif page == "Clip Editor & Export":
         )
 
         crop_mode = "Center crop"
+        crop_position = 0.5
 
         if aspect_label.startswith("9:16"):
 
@@ -1176,6 +1160,12 @@ elif page == "Clip Editor & Export":
                     "Fit with blurred background",
                 ],
             )
+            if crop_mode == "Center crop":
+                crop_position = st.slider(
+                    "Horizontal subject position",
+                    0, 100, 50, 1,
+                    help="Shift the crop left or right to keep the speaker in frame.",
+                ) / 100.0
 
         burn = st.checkbox(
             "Burn subtitles into video",
@@ -1297,6 +1287,7 @@ elif page == "Clip Editor & Export":
                         logo_path,
                         mix_audio,
                         music_volume,
+                        crop_position,
                     )
 
                     completed.append(str(output))
