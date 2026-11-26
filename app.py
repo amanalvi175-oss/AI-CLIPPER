@@ -594,6 +594,21 @@ def export_clip(
         )
 
     current = "base"
+    zoom_effect = bool(st.session_state.get("export_zoom", False))
+    progress_bar = bool(st.session_state.get("export_progress", False))
+    emoji_accent = bool(st.session_state.get("export_emoji", False))
+
+    if zoom_effect:
+        graph += f";[{current}]scale=iw*1.06:ih*1.06,crop=iw/1.06:ih/1.06,setsar=1[zoomed]"
+        current = "zoomed"
+
+    if progress_bar:
+        graph += f";[{current}]drawbox=x=0:y=ih-10:w='iw*t/{max(duration, 0.1):.3f}':h=10:color=0x35E6FF@0.95:t=fill[progress]"
+        current = "progress"
+
+    if emoji_accent:
+        graph += f";[{current}]drawtext=text='✦':fontcolor=0x35E6FF:fontsize=34:x=w-70:y=70:enable='between(t,0,2)'[accent]"
+        current = "accent"
 
     if burn_subtitles:
         word_ass = export_dir / f"clip_{number:02}_words.ass"
@@ -1280,6 +1295,11 @@ elif page == "Clip Editor & Export":
             0.0, 1.5, 0.3, 0.1,
         )
 
+        zoom_effect = st.checkbox("Subtle cinematic zoom", value=False)
+        progress_bar = st.checkbox("Add animated bottom progress bar", value=True)
+        emoji_accent = st.checkbox("Add sparkle accent overlay", value=False,
+                                   help="Uses FFmpeg drawtext; may depend on available fonts.")
+
         music_upload = st.file_uploader(
             "Optional background music",
             type=["mp3", "wav", "m4a"],
@@ -1359,6 +1379,10 @@ elif page == "Clip Editor & Export":
                             )
                     else:
                         st.warning("This video has no audio track; silence removal was skipped.")
+
+                st.session_state["export_zoom"] = zoom_effect
+                st.session_state["export_progress"] = progress_bar
+                st.session_state["export_emoji"] = emoji_accent
 
                 for i, clip in enumerate(
                     st.session_state.clips, 1
