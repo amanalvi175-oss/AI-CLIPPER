@@ -1,7 +1,11 @@
 """Streamlit Community Cloud entry point.
 
-The main application is maintained in app.py. This wrapper keeps the
-configured Streamlit Cloud entry-point path working without duplicating code.
+Execute the main application as the Streamlit script so the UI is rendered
+reliably by Community Cloud.
 """
 
-import app  # noqa: F401  (running app.py builds the Streamlit interface)
+from pathlib import Path
+import runpy
+
+app_path = Path(__file__).with_name("app.py")
+runpy.run_path(str(app_path), run_name="__main__")
